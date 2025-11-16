@@ -859,6 +859,9 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     private void initializeWebViewSettings() {
         webView.getSettings().setJavaScriptEnabled(true);
         webView.getSettings().setDomStorageEnabled(true);
+        // Enable pinch-to-zoom (support and built-in controls)
+        webView.getSettings().setSupportZoom(true);
+        webView.getSettings().setBuiltInZoomControls(true);
 
         int textZoom = sharedPreferencesRepository.getTextZoom();
         if (textZoom != 0) {
