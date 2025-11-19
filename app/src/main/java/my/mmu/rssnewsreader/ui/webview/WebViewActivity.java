@@ -176,14 +176,16 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             String selectedValue = entryValues[which].toString();
             sharedPreferencesRepository.setDefaultTranslationLanguage(selectedValue);
             targetLanguage = selectedValue;
-            translate();
+            // translate();
+            // This triggers the new translation logic after a language is selected from the dialog
+            handleOtherToolbarItems(R.id.translate);
             dialog.dismiss();
         });
 
         builder.show();
     }
 
-    private void doWhenTranslationFinish(EntryInfo entryInfo, String originalHtml, String translatedHtml) {
+    /*private void doWhenTranslationFinish(EntryInfo entryInfo, String originalHtml, String translatedHtml) {
         loading.setVisibility(View.INVISIBLE);
 
         if (webViewViewModel.getOriginalHtmlById(currentId) == null && originalHtml != null) {
@@ -221,9 +223,9 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
         Log.d(TAG, "FINAL translatedContent passed to TTS: " + translatedContent);
         Log.d(TAG, "FINAL currentId: " + currentId + ", isTranslatedView: " + isTranslatedView);
-    }
+    }*/
 
-    private void translate() {
+    /*private void translate() {
         Log.d(TAG, "translate: html\n" + webViewViewModel.getHtmlById(currentId));
         makeSnackbar("Translation in progress");
         loading.setVisibility(View.VISIBLE);
@@ -257,9 +259,9 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                     performTranslation(feedLanguage, targetLanguage, content, entryInfo.getEntryTitle());
                 }
         );
-    }
+    }*/
 
-    private void performTranslation(String sourceLang, String targetLang, String html, String title) {
+    /*private void performTranslation(String sourceLang, String targetLang, String html, String title) {
         Single<String> translationFlow;
         switch (translationMethod) {
             case "lineByLine":
@@ -284,6 +286,56 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                     loading.setVisibility(View.GONE);
                 }
         );
+    }*/
+
+    private void initializeTranslationObservers() {
+        // This watches the "Is Translating?" notepad from the ViewModel
+        webViewViewModel.isTranslating().observe(this, isTranslating -> {
+            if (isTranslating) {
+                loading.setVisibility(View.VISIBLE);
+                loading.setIndeterminate(true); // Shows a continuous loading animation
+                makeSnackbar("Translating... please wait");
+            } else {
+                loading.setIndeterminate(false);
+                loading.setVisibility(View.GONE);
+            }
+        });
+
+        // This watches the "Finished Translation" notepad
+        webViewViewModel.getTranslatedArticleContent().observe(this, translatedHtml -> {
+            if (translatedHtml == null || translatedHtml.isEmpty()) {
+                makeSnackbar("Translation returned empty content.");
+                return;
+            }
+
+            // Save the new translated HTML to the database
+            webViewViewModel.updateHtml(translatedHtml, currentId);
+
+            // Also save the plain text version for the TTS player
+            String translatedContent = textUtil.extractHtmlContent(translatedHtml, "--####--");
+            webViewViewModel.updateTranslated(translatedContent, currentId);
+
+            // Load the new HTML into the WebView
+            loadHtmlIntoWebView(translatedHtml);
+
+            // Update the UI state
+            isTranslatedView = true;
+            sharedPreferencesRepository.setIsTranslatedView(currentId, true);
+            toggleTranslationButton.setVisible(true);
+            toggleTranslationButton.setTitle("Show Original");
+            makeSnackbar("Translation successful!");
+        });
+
+        // This watches the "Did something go wrong?" notepad
+        webViewViewModel.getTranslationError().observe(this, error -> {
+            if (error != null && !error.isEmpty()) {
+                new AlertDialog.Builder(this)
+                        .setTitle("Translation Error")
+                        .setMessage(error)
+                        .setPositiveButton(android.R.string.ok, null)
+                        .show();
+            }
+        });
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -293,6 +345,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
 
         webViewViewModel = new ViewModelProvider(this).get(WebViewViewModel.class);
+        initializeTranslationObservers();
 
         webViewViewModel.getTranslatedTextReady().observe(this, translatedText -> {
             if (!isReadingMode && isTranslatedView && translatedText != null && !translatedText.trim().isEmpty()) {
@@ -622,11 +675,40 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
     private boolean handleOtherToolbarItems(int itemId) {
         switch (itemId) {
-            case R.id.translate:
+            /*case R.id.translate:
                 if (targetLanguage == null || targetLanguage.isEmpty()) {
                     showTranslationLanguageDialog(this);
                 }
                 translate();
+                return true;*/
+
+            case R.id.translate:
+                if (targetLanguage == null || targetLanguage.isEmpty()) {
+                    showTranslationLanguageDialog(this);
+                    return true;
+                }
+
+                // Get the original, untranslated HTML to send to the new translator
+                String originalHtmlToTranslate = webViewViewModel.getOriginalHtmlById(currentId);
+                if (originalHtmlToTranslate == null || originalHtmlToTranslate.isEmpty()) {
+                    // If we don't have a clean original version, use the current one
+                    originalHtmlToTranslate = webViewViewModel.getHtmlById(currentId);
+                }
+
+                if (originalHtmlToTranslate == null || originalHtmlToTranslate.isEmpty()) {
+                    makeSnackbar("Article content is not available for translation.");
+                    return true;
+                }
+
+                EntryInfo entryInfoForLanguage = webViewViewModel.getEntryInfoById(currentId);
+                if (entryInfoForLanguage == null) {
+                    makeSnackbar("Could not determine source language.");
+                    return true;
+                }
+                String sourceLanguage = entryInfoForLanguage.getFeedLanguage();
+
+                // Call the new translate method in the ViewModel
+                webViewViewModel.translateArticle(originalHtmlToTranslate, sourceLanguage, targetLanguage);
                 return true;
 
             case R.id.zoomIn:

@@ -47,6 +47,7 @@ public class LoginWebViewActivity extends AppCompatActivity {
         if (webView.canGoBack()) {
             webView.goBack();
         } else {
+            super.onBackPressed();
             MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(LoginWebViewActivity.this);
             builder.setTitle(R.string.login_complete_confirmation)
                     .setIcon(R.drawable.ic_alert)
