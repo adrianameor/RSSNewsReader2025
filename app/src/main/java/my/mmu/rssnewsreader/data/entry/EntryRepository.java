@@ -400,4 +400,16 @@ public class EntryRepository {
         Entry entry = entryDao.getEntryById(id);
         return (entry != null) ? entry.getTranslated() : null;
     }
+
+    public List<EntryInfo> getUntranslatedEntriesInfo() {
+        return entryDao.getUntranslatedEntriesInfo();
+    }
+
+    public void updateTranslatedTitle(String translatedTitle, long id) {
+        entryDao.updateTranslatedTitle(translatedTitle, id);
+    }
+
+    public void updateTranslatedSummary(String translatedSummary, long id) {
+        entryDao.updateTranslatedSummary(translatedSummary, id);
+    }
 }

@@ -21,7 +21,7 @@ import my.mmu.rssnewsreader.data.playlist.PlaylistDao;
 import javax.inject.Inject;
 import javax.inject.Provider;
 
-@Database(entities = {Feed.class, Entry.class, Playlist.class, History.class}, version = 5)
+@Database(entities = {Feed.class, Entry.class, Playlist.class, History.class}, version = 7)
 @androidx.room.TypeConverters({TypeConverters.class})
 // make this abstract to let room do the implementation
 public abstract class AppDatabase extends RoomDatabase {
@@ -78,6 +78,33 @@ public abstract class AppDatabase extends RoomDatabase {
                 Log.d("DatabaseMigration", "Migration from v4 to v5 completed successfully.");
             } catch (Exception e) {
                 Log.e("DatabaseMigration", "Migration v4 to v5 failed: " + e.getMessage());
+            }
+        }
+    };
+
+    // FIX: Instructions to build the 'target_translation_language' room.
+    public static final Migration MIGRATION_5_6 = new Migration(5, 6) {
+        @Override
+        public void migrate(@NonNull SupportSQLiteDatabase database) {
+            try {
+                database.execSQL("ALTER TABLE entry_table ADD COLUMN target_translation_language TEXT");
+                Log.d("DatabaseMigration", "Migration from v5 to v6 completed successfully.");
+            } catch (Exception e) {
+                Log.e("DatabaseMigration", "Migration v5 to v6 failed: " + e.getMessage());
+            }
+        }
+    };
+
+    // THIS IS THE FIX: Instructions to build the 'translated_title' and 'translated_summary' rooms.
+    public static final Migration MIGRATION_6_7 = new Migration(6, 7) {
+        @Override
+        public void migrate(@NonNull SupportSQLiteDatabase database) {
+            try {
+                database.execSQL("ALTER TABLE entry_table ADD COLUMN translated_title TEXT");
+                database.execSQL("ALTER TABLE entry_table ADD COLUMN translated_summary TEXT");
+                Log.d("DatabaseMigration", "Migration from v6 to v7 completed successfully.");
+            } catch (Exception e) {
+                Log.e("DatabaseMigration", "Migration v6 to v7 failed: " + e.getMessage());
             }
         }
     };

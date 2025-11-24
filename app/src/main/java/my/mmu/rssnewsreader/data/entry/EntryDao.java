@@ -221,4 +221,16 @@ public interface EntryDao {
 
     @Query("UPDATE entry_table SET translated = :translated WHERE id = :id")
     void updateTranslatedText(String translated, long id);
+
+    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
+            "FROM entry_table e " +
+            "LEFT JOIN feed_table f ON e.feedId = f.id " +
+            "WHERE e.translated_title IS NULL OR e.translated_summary IS NULL")
+    List<EntryInfo> getUntranslatedEntriesInfo();
+
+    @Query("UPDATE entry_table SET translated_title = :translatedTitle WHERE id = :id")
+    void updateTranslatedTitle(String translatedTitle, long id);
+
+    @Query("UPDATE entry_table SET translated_summary = :translatedSummary WHERE id = :id")
+    void updateTranslatedSummary(String translatedSummary, long id);
 }

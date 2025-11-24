@@ -33,6 +33,17 @@ public class Entry {
     @Nullable
     @ColumnInfo(name = "translated")
     private String translated;
+    @Nullable
+    @ColumnInfo(name = "target_translation_language")
+    private String targetTranslationLanguage;
+
+    @Nullable
+    @ColumnInfo(name = "translated_title")
+    private String translatedTitle;
+
+    @Nullable
+    @ColumnInfo(name = "translated_summary")
+    private String translatedSummary;
 
     public Entry(long feedId, String title, String link, String description, String imageUrl, String category, Date publishedDate) {
         this.feedId = feedId;
@@ -178,5 +189,32 @@ public class Entry {
 
     public void setTranslated(String translated) {
         this.translated = translated;
+    }
+
+    @Nullable
+    public String getTargetTranslationLanguage() {
+        return targetTranslationLanguage;
+    }
+
+    public void setTargetTranslationLanguage(@Nullable String targetTranslationLanguage) {
+        this.targetTranslationLanguage = targetTranslationLanguage;
+    }
+
+    @Nullable
+    public String getTranslatedTitle() {
+        return translatedTitle;
+    }
+
+    public void setTranslatedTitle(@Nullable String translatedTitle) {
+        this.translatedTitle = translatedTitle;
+    }
+
+    @Nullable
+    public String getTranslatedSummary() {
+        return translatedSummary;
+    }
+
+    public void setTranslatedSummary(@Nullable String translatedSummary) {
+        this.translatedSummary = translatedSummary;
     }
 }

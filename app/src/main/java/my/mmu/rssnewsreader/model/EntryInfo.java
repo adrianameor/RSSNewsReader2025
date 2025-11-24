@@ -37,6 +37,10 @@ public class EntryInfo {
     @Ignore
     private boolean isLoading = false;
 
+    public String translatedTitle;
+    public String translatedSummary;
+    public String targetTranslationLanguage;
+
     @Ignore
     public EntryInfo(String entryTitle, String entryLink, String entryDescription, String entryImageUrl, String entryCategory, Date entryPublishedDate, Date visitedDate, String bookmark, long feedId, float ttsSpeechRate, String feedLanguage, String feedTitle, String feedImageUrl) {
         this.entryTitle = entryTitle;
@@ -259,5 +263,17 @@ public class EntryInfo {
 
     public void   setHtml(String html) {
         this.html = html;
+    }
+
+    public String getTranslatedTitle() {
+        return translatedTitle;
+    }
+
+    public String getTranslatedSummary() {
+        return translatedSummary;
+    }
+
+    public String getTargetTranslationLanguage() {
+        return targetTranslationLanguage;
     }
 }
