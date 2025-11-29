@@ -698,14 +698,29 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
     private boolean handleOtherToolbarItems(int itemId) {
         switch (itemId) {
-            /*case R.id.translate:
-                if (targetLanguage == null || targetLanguage.isEmpty()) {
-                    showTranslationLanguageDialog(this);
-                }
-                translate();
-                return true;*/
 
             case R.id.translate:
+                // --- THIS IS THE FIX ---
+                // 1. First, check if a valid translation already exists in the database.
+                String existingTranslatedHtml = entryRepository.getHtmlById(currentId);
+                String originalHtml = entryRepository.getOriginalHtmlById(currentId);
+                boolean hasBeenTranslated = existingTranslatedHtml != null && !existingTranslatedHtml.equals(originalHtml);
+
+                if (hasBeenTranslated) {
+                    // If it's already translated, just show a message and do nothing else.
+                    makeSnackbar("Article has already been translated.");
+
+                    // Ensure the UI is in the correct state just in case.
+                    if (!isTranslatedView) {
+                        isTranslatedView = true;
+                        sharedPreferencesRepository.setIsTranslatedView(currentId, true);
+                        toggleTranslationButton.setTitle("Show Original");
+                        loadHtmlIntoWebView(existingTranslatedHtml);
+                    }
+                    return true; // Stop here, do not re-translate.
+                }
+
+                // 2. If we reach here, it means no translation exists. Proceed with the original logic to start a new one.
                 if (targetLanguage == null || targetLanguage.isEmpty()) {
                     showTranslationLanguageDialog(this);
                     return true;
@@ -714,7 +729,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 // Get the original, untranslated HTML to send to the new translator
                 String originalHtmlToTranslate = webViewViewModel.getOriginalHtmlById(currentId);
                 if (originalHtmlToTranslate == null || originalHtmlToTranslate.isEmpty()) {
-                    // If we don't have a clean original version, use the current one
                     originalHtmlToTranslate = webViewViewModel.getHtmlById(currentId);
                 }
 
@@ -730,7 +744,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 }
                 String sourceLanguage = entryInfoForLanguage.getFeedLanguage();
 
-                // Call the new translate method in the ViewModel
+                // Call the translate method in the ViewModel to start the process
                 webViewViewModel.translateArticle(originalHtmlToTranslate, sourceLanguage, targetLanguage);
                 return true;
 
@@ -801,11 +815,11 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 }
 
                 String translatedHtml = webViewViewModel.getHtmlById(currentId);
-                String originalHtml = webViewViewModel.getOriginalHtmlById(currentId);
-                String htmlToLoad = isTranslatedView ? translatedHtml : originalHtml;
+                String originalHtmlForToggle = webViewViewModel.getOriginalHtmlById(currentId);
+                String htmlToLoad = isTranslatedView ? translatedHtml : originalHtmlForToggle;
 
                 Log.d(TAG, "TOGGLE BUTTON PRESSED");
-                Log.d(TAG, "Original HTML:\n" + originalHtml);
+                Log.d(TAG, "Original HTML:\n" + originalHtmlForToggle);
                 Log.d(TAG, "Translated HTML:\n" + translatedHtml);
                 Log.d(TAG, "HTML loaded for toggle view:\n" + htmlToLoad);
 
