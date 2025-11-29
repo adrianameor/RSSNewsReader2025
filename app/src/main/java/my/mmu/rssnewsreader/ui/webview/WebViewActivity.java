@@ -35,6 +35,8 @@ import androidx.lifecycle.ViewModelProvider;
 import io.reactivex.rxjava3.core.Single;
 import io.reactivex.rxjava3.disposables.CompositeDisposable;
 import io.reactivex.rxjava3.disposables.Disposable;
+import kotlin.reflect.jvm.internal.impl.metadata.ProtoBuf;
+import kotlin.reflect.jvm.internal.impl.name.SpecialNames;
 import my.mmu.rssnewsreader.R;
 import my.mmu.rssnewsreader.data.sharedpreferences.SharedPreferencesRepository;
 import my.mmu.rssnewsreader.model.EntryInfo;
@@ -68,6 +70,7 @@ import java.util.Set;
 import javax.inject.Inject;
 
 import dagger.hilt.android.AndroidEntryPoint;
+import my.mmu.rssnewsreader.data.repository.TranslationRepository;
 
 @AndroidEntryPoint
 public class WebViewActivity extends AppCompatActivity implements WebViewListener {
@@ -96,6 +99,8 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     private boolean isReadingMode;
     private boolean showOfflineButton;
     private boolean clearHistory;
+    private boolean isInitialLoad = true;
+
     private MenuItem toggleTranslationButton;
     private boolean isTranslatedView = true;
     private MaterialToolbar toolbar;
@@ -136,6 +141,9 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
     @Inject
     EntryRepository entryRepository;
+
+    @Inject
+    TranslationRepository translationRepository;
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
@@ -347,7 +355,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         webViewViewModel = new ViewModelProvider(this).get(WebViewViewModel.class);
         initializeTranslationObservers();
 
-        webViewViewModel.getTranslatedTextReady().observe(this, translatedText -> {
+        /*webViewViewModel.getTranslatedTextReady().observe(this, translatedText -> {
             if (!isReadingMode && isTranslatedView && translatedText != null && !translatedText.trim().isEmpty()) {
                 Log.d(TAG, "TTS triggered after LiveData translation update");
 
@@ -356,7 +364,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 ttsPlayer.extract(currentId, feedId, translatedText, lang);
                 Log.d(TAG, "LiveData.observe fired, isTranslatedView = " + isTranslatedView);
             }
-        });
+        });*/
 
         isReadingMode = getIntent().getBooleanExtra("read", false);
 
@@ -368,8 +376,8 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
         targetLanguage = sharedPreferencesRepository.getDefaultTranslationLanguage();
         translationMethod = sharedPreferencesRepository.getTranslationMethod();
-        textUtil = new TextUtil(sharedPreferencesRepository);
         compositeDisposable = new CompositeDisposable();
+        textUtil = new TextUtil(sharedPreferencesRepository, translationRepository);
 
         initializeToolbarListeners();
         initializeWebViewSettings();
@@ -435,30 +443,29 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     }
 
     private void loadHtmlIntoWebView(String html) {
-        Document doc = Jsoup.parse(html);
-        doc.head().append(webViewViewModel.getStyle());
-
+        // THIS IS THE FIX for the "Loading title..." bug.
         EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
-        if (entryInfo != null && !doc.html().contains("class=\"entry-header\"")) {
-            doc.selectFirst("body").prepend(
-                    webViewViewModel.getHtml(
-                            entryInfo.getEntryTitle(),
-                            entryInfo.getFeedTitle(),
-                            entryInfo.getEntryPublishedDate(),
-                            entryInfo.getFeedImageUrl()
-                    )
-            );
+        String titleToDisplay;
+
+        if (entryInfo != null) {
+            if (isTranslatedView) {
+                // If we want the translated view, try to get the translated title first.
+                titleToDisplay = entryInfo.getTranslatedTitle();
+                // If it's not ready, gracefully fall back to the original title.
+                if (titleToDisplay == null || titleToDisplay.isEmpty()) {
+                    titleToDisplay = entryInfo.getEntryTitle();
+                }
+            } else {
+                // Otherwise, we are in the original view, so just use the original title.
+                titleToDisplay = entryInfo.getEntryTitle();
+            }
+        } else {
+            // Ultimate fallback if entryInfo itself is null
+            titleToDisplay = "Title not available";
         }
 
-        webView.loadDataWithBaseURL("file///android_res/", doc.html(), "text/html", "UTF-8", null);
-
-        webView.postDelayed(() -> {
-            int scrollX = sharedPreferencesRepository.getScrollX(currentId);
-            int scrollY = sharedPreferencesRepository.getScrollY(currentId);
-            webView.scrollTo(scrollX, scrollY);
-        }, 300);
-
-        syncLoadingWithTts();
+        // Now, call the other method that does the real work, passing the correct title.
+        loadHtmlIntoWebView(html, titleToDisplay);
     }
 
     private void updateToggleTranslationVisibility() {
@@ -483,117 +490,123 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     }
 
     private void loadEntryContent() {
-        EntryInfo entryInfo = webViewViewModel.getLastVisitedEntry();
+        long entryId = getIntent().getLongExtra("entry_id", -1);
+        if (entryId == -1) {
+            makeSnackbar("Error: No article ID provided.");
+            finish();
+            return;
+        }
+        currentId = entryId;
+
+        EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
         if (entryInfo == null) {
-            makeSnackbar("No article to load.");
+            makeSnackbar("Error: Could not load article data.");
+            finish();
             return;
         }
 
-        currentId = entryInfo.getEntryId();
-        Entry entry = entryRepository.getEntryById(currentId);
+        currentLink = entryInfo.getEntryLink();
+        feedId = entryInfo.getFeedId();
+        bookmark = entryInfo.getBookmark();
 
-        if (entry == null) {
-            makeSnackbar("Failed to load article content.");
-            return;
-        }
+        // --- THIS IS THE FIX ---
+        // First, check if there is any offline content at all.
+        String originalHtml = entryRepository.getOriginalHtmlById(currentId);
+        if (originalHtml == null || originalHtml.trim().isEmpty()) {
+            // This is a "RED CIRCLE" article. No offline content exists.
+            Log.d(TAG, "No offline content found for entry " + currentId + ". Loading URL directly.");
 
-        if (sharedPreferencesRepository.getWebViewMode(currentId)) {
-            loadFromBrowserMode(entryInfo);
-            return;
-        }
-
-        Log.d("DEBUG", "Original: " + entry.getOriginalHtml());
-        Log.d("DEBUG", "Translated: " + entry.getTranslated());
-
-        if (entry.getOriginalHtml() != null && entry.getTranslated() != null) {
-            toggleTranslationButton.setVisible(true);
-            webViewViewModel.updateOriginalHtml(entry.getOriginalHtml(), entry.getId());
-
-            if (entry.getHtml() != null) {
-                webViewViewModel.updateHtml(entry.getHtml(), entry.getId());
-            }
-        } else {
-            toggleTranslationButton.setVisible(false);
-        }
-
-        if (!sharedPreferencesRepository.hasTranslationToggle(currentId)) {
-            if (entry.getTranslated() != null && entry.getHtml() != null) {
-                isTranslatedView = true;
+            // Directly load the article's live URL into the WebView.
+            if (currentLink != null && !currentLink.isEmpty()) {
+                webView.loadUrl(currentLink);
             } else {
-                isTranslatedView = false;
+                // If there's no link, we can't do anything. Show an error.
+                makeSnackbar("Error: No URL found for this article.");
+                finish();
+                return;
             }
-        } else {
-            isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(currentId);
-        }
 
-        Log.d(TAG, "loadEntryContent: isTranslatedView = " + isTranslatedView);
+            // Set up the UI for "browser mode"
+            if (getSupportActionBar() != null) {
+                getSupportActionBar().setTitle(entryInfo.getEntryTitle());
+            }
+            browserButton.setVisible(false); // We are already in the browser
+            offlineButton.setVisible(false);  // Show the button to return to an (empty) offline view
+            toggleTranslationButton.setVisible(false); // No offline content to translate
+            reloadButton.setVisible(true);
+            highlightTextButton.setVisible(false);
 
-        EntryInfo info = webViewViewModel.getEntryInfoById(currentId);
-        if (info == null) {
-            makeSnackbar("Feed language info not found.");
+            // Stop further processing in this method to prevent the crash.
             return;
         }
+        // --- END OF FIX ---
 
-        Log.d("LoadEntry", "entry.getHtml() = " + (entry.getHtml() != null));
-        Log.d("LoadEntry", "entry.getTranslated() = " + (entry.getTranslated() != null));
-        Log.d("LoadEntry", "isTranslatedView = " + isTranslatedView);
 
-        String html = isTranslatedView
-                ? webViewViewModel.getHtmlById(currentId)
-                : webViewViewModel.getOriginalHtmlById(currentId);
+        // If we reach here, it means offline content EXISTS (yellow or green circle).
+        // The rest of the original method can now run safely.
+        Log.d("DEBUG_TRANSLATION", "--- Starting loadEntryContent for offline article ---");
 
-        Log.d("LoadEntry", "htmlToLoad (translated) = " + (html != null ? html.length() : "null"));
+        String titleFromIntent = getIntent().getStringExtra("entry_title");
+        boolean isStartingInTranslatedView = getIntent().getBooleanExtra("is_translated", false);
+        Log.d("DEBUG_TRANSLATION", "Received from Intent: is_translated = " + isStartingInTranslatedView);
 
-        String contentToRead = isTranslatedView
-                ? entry.getTranslated()
-                : entry.getContent();
+        String titleToDisplay = (titleFromIntent != null && !titleFromIntent.isEmpty()) ? titleFromIntent : entryInfo.getEntryTitle();
+
+        isTranslatedView = isStartingInTranslatedView;
+        sharedPreferencesRepository.setIsTranslatedView(currentId, isTranslatedView);
+        Log.d("DEBUG_TRANSLATION", "State set: isTranslatedView = " + isTranslatedView);
+
+        String htmlToLoad;
+        String contentForTts;
+
+        if (isTranslatedView) {
+            Log.d("DEBUG_TRANSLATION", "Branch: Trying to load TRANSLATED content.");
+            htmlToLoad = entryRepository.getHtmlById(currentId);
+            Log.d("DEBUG_TRANSLATION", "Result from getHtmlById (translated): " + (htmlToLoad == null ? "null" : "found " + htmlToLoad.length() + " chars"));
+
+            if (htmlToLoad == null || htmlToLoad.trim().isEmpty()) {
+                Log.w("DEBUG_TRANSLATION", "Translated HTML was not ready. Falling back to ORIGINAL content for this load.");
+                htmlToLoad = originalHtml; // We already fetched this
+                Log.d("DEBUG_TRANSLATION", "Result from getOriginalHtmlById (fallback): " + (htmlToLoad == null ? "null" : "found " + htmlToLoad.length() + " chars"));
+            }
+            contentForTts = entryRepository.getEntryById(currentId) != null ? entryRepository.getEntryById(currentId).getTranslated() : null;
+        } else {
+            Log.d("DEBUG_TRANSLATION", "Branch: Loading ORIGINAL content.");
+            htmlToLoad = originalHtml; // Use the one we already fetched
+            Log.d("DEBUG_TRANSLATION", "Result from getOriginalHtmlById: " + (htmlToLoad == null ? "null" : "found " + htmlToLoad.length() + " chars"));
+            contentForTts = entryRepository.getEntryById(currentId) != null ? entryRepository.getEntryById(currentId).getContent() : null;
+        }
+
+        if (htmlToLoad == null || htmlToLoad.trim().isEmpty()) {
+            Log.e("DEBUG_TRANSLATION", "CRITICAL: htmlToLoad is STILL null or empty after all checks. Loading error page.");
+            htmlToLoad = "<html><body><h2>Content could not be loaded.</h2></body></html>";
+        }
+
+        Log.d("DEBUG_TRANSLATION", "Final decision: Loading HTML into WebView (" + htmlToLoad.length() + " chars).");
+        loadHtmlIntoWebView(htmlToLoad, titleToDisplay);
+
+        if (getSupportActionBar() != null) {
+            getSupportActionBar().setTitle(titleToDisplay);
+        }
+
+        boolean hasTranslatedVersionInDb = entryRepository.getHtmlById(currentId) != null && !entryRepository.getHtmlById(currentId).isEmpty();
+        toggleTranslationButton.setVisible(hasTranslatedVersionInDb);
+        toggleTranslationButton.setTitle(isTranslatedView ? "Show Original" : "Show Translation");
+
+        if (bookmark == null || bookmark.equals("N")) {
+            bookmarkButton.setIcon(R.drawable.ic_bookmark_outline);
+        } else {
+            bookmarkButton.setIcon(R.drawable.ic_bookmark_filled);
+        }
 
         String lang = getLanguageForCurrentView(currentId, isTranslatedView, "en");
-
-        Log.d(TAG, "loadEntryContent - About to speak " + (isTranslatedView ? "Translated" : "Original"));
-        Log.d(TAG, "Language to use: " + lang);
-        Log.d(TAG, "Text to read: " + contentToRead);
-
         ttsExtractor.setCurrentLanguage(lang, true);
-
-        if (html != null && !html.trim().isEmpty()) {
-            loadHtmlIntoWebView(html);
-            ttsPlayer.extract(entry.getId(), entry.getFeedId(), contentToRead, lang);
-        } else {
-            Log.w(TAG, "HTML missing, skipping load.");
+        if (contentForTts != null && !contentForTts.trim().isEmpty()) {
+            ttsPlayer.extract(currentId, feedId, contentForTts, lang);
         }
 
         sharedPreferencesRepository.setCurrentReadingEntryId(currentId);
-
-        observeLiveEntry();
-        observeAutoTranslation();
-
         syncLoadingWithTts();
-    }
-
-    private void loadFromBrowserMode(EntryInfo entryInfo) {
-        browserButton.setVisible(false);
-        offlineButton.setVisible(true);
-        webView.loadUrl(entryInfo.getEntryLink());
-    }
-
-    private void observeLiveEntry() {
-        webViewViewModel.triggerEntryRefresh(currentId);
-
-        webViewViewModel.getLiveEntry().observe(this, entry -> {
-            if (entry == null) {
-                toggleTranslationButton.setVisible(false);
-                makeSnackbar("This article is missing.");
-            }
-        });
-
-        webViewViewModel.getOriginalHtmlLiveData().observe(this, originalHtml -> {
-            updateToggleStateAndWebView(originalHtml, webViewViewModel.getTranslatedHtmlLiveData().getValue());
-        });
-
-        webViewViewModel.getTranslatedHtmlLiveData().observe(this, translatedHtml -> {
-            updateToggleStateAndWebView(webViewViewModel.getOriginalHtmlLiveData().getValue(), translatedHtml);
-        });
     }
 
     private void updateToggleStateAndWebView(String originalHtml, String translatedHtml) {
@@ -605,13 +618,17 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
         String htmlToLoad = isTranslatedView ? translatedHtml : originalHtml;
 
+        // THIS IS THE FIX: Get the current title and pass it to the two-argument version of the helper.
+        String titleToDisplay = (getSupportActionBar() != null && getSupportActionBar().getTitle() != null)
+                ? getSupportActionBar().getTitle().toString()
+                : "";
+
         Log.d(TAG, "LiveEntry - Current Mode: " + (isTranslatedView ? "Translated" : "Original"));
-        Log.d(TAG, "LiveEntry - Original HTML:\n" + originalHtml);
-        Log.d(TAG, "LiveEntry - Translated HTML:\n" + translatedHtml);
         Log.d(TAG, "LiveEntry - HTML to Load:\n" + htmlToLoad);
 
         if (htmlToLoad != null && !htmlToLoad.trim().isEmpty()) {
-            loadHtmlToWebView(htmlToLoad);
+            // Call the TWO-argument version to prevent the title from being overwritten.
+            loadHtmlIntoWebView(htmlToLoad, titleToDisplay);
         } else {
             Log.w(TAG, "Skipped loading empty html in updateToggleStateAndWebView()");
         }
@@ -650,11 +667,9 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         observer.observeForever(checkAutoTranslated);
     }
 
-    private void loadHtmlToWebView(String html) {
-        if (html == null || html.trim().isEmpty()) {
-            return;
-        }
-
+    private void loadHtmlIntoWebView(String html, String title) {
+        // THIS IS THE FIX: This method now accepts the correct title as an argument
+        // and uses it when rebuilding the header, instead of fetching the wrong one.
         Document doc = Jsoup.parse(html);
         doc.head().append(webViewViewModel.getStyle());
 
@@ -662,7 +677,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         if (entryInfo != null && !doc.html().contains("class=\"entry-header\"")) {
             doc.selectFirst("body").prepend(
                     webViewViewModel.getHtml(
-                            entryInfo.getEntryTitle(),
+                            title, // Use the correct title passed into this method
                             entryInfo.getFeedTitle(),
                             entryInfo.getEntryPublishedDate(),
                             entryInfo.getFeedImageUrl()
@@ -671,6 +686,14 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         }
 
         webView.loadDataWithBaseURL("file///android_res/", doc.html(), "text/html", "UTF-8", null);
+
+        webView.postDelayed(() -> {
+            int scrollX = sharedPreferencesRepository.getScrollX(currentId);
+            int scrollY = sharedPreferencesRepository.getScrollY(currentId);
+            webView.scrollTo(scrollX, scrollY);
+        }, 300);
+
+        syncLoadingWithTts();
     }
 
     private boolean handleOtherToolbarItems(int itemId) {
@@ -971,6 +994,14 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 if (combinedProgress >= 95 && (!ttsPlayer.isPreparing() || ttsPlayer.ttsIsNull())) {
                     loading.setVisibility(View.GONE);
                 }
+            }
+            @Override
+            public void onReceivedTitle(WebView view, String title) {
+                // THIS IS THE FIX: We override this method to do nothing.
+                // This stops the WebView from ever changing our Activity's title,
+                // solving the "flicker" bug permanently.
+                Log.d(TAG, "WebChromeClient: onReceivedTitle called with '" + title + "'. IGNORING IT.");
+                // Intentionally do not call super.onReceivedTitle(view, title);
             }
         });
     }
@@ -1335,6 +1366,30 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         }
 
         @Override
+        public void onPageFinished(WebView view, String url) {
+            super.onPageFinished(view, url);
+
+            // Get the up-to-date title from the intent, which was sent by the previous screen.
+            String titleFromIntent = getIntent().getStringExtra("entry_title");
+
+            // Use a fallback to the original title if the intent extra is missing for any reason.
+            String titleToDisplay = titleFromIntent;
+            if (titleToDisplay == null || titleToDisplay.isEmpty()) {
+                EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
+                if (entryInfo != null) {
+                    titleToDisplay = entryInfo.getEntryTitle();
+                }
+            }
+
+            // Set the title on the toolbar. This happens after the page is fully loaded,
+            // preventing it from being overwritten.
+            if (getSupportActionBar() != null && titleToDisplay != null) {
+                Log.d(TAG, "onPageFinished (WebClient): Setting final toolbar title to: '" + titleToDisplay + "'");
+                getSupportActionBar().setTitle(titleToDisplay);
+            }
+        }
+
+        @Override
         public boolean shouldOverrideUrlLoading(WebView view, String url) {
             view.loadUrl(url);
             return true;
@@ -1374,6 +1429,30 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             if (clearHistory) {
                 clearHistory = false;
                 webView.clearHistory();
+            }
+        }
+
+        @Override
+        public void onPageFinished(WebView view, String url) {
+            super.onPageFinished(view, url);
+
+            // Get the up-to-date title from the intent, which was sent by the previous screen.
+            String titleFromIntent = getIntent().getStringExtra("entry_title");
+
+            // Use a fallback to the original title if the intent extra is missing for any reason.
+            String titleToDisplay = titleFromIntent;
+            if (titleToDisplay == null || titleToDisplay.isEmpty()) {
+                EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
+                if (entryInfo != null) {
+                    titleToDisplay = entryInfo.getEntryTitle();
+                }
+            }
+
+            // Set the title on the toolbar. This happens after the page is fully loaded,
+            // preventing it from being overwritten.
+            if (getSupportActionBar() != null && titleToDisplay != null) {
+                Log.d(TAG, "onPageFinished (ReadingWebClient): Setting final toolbar title to: '" + titleToDisplay + "'");
+                getSupportActionBar().setTitle(titleToDisplay);
             }
         }
 
@@ -1423,6 +1502,13 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             if (metadata == null) {
                 return;
             }
+
+            String titleFromIntent = getIntent().getStringExtra("entry_title");
+            if (titleFromIntent != null && !titleFromIntent.isEmpty() && getSupportActionBar() != null) {
+                Log.d(TAG, "onMetadataChanged: Fighting back against flicker. Resetting title to: " + titleFromIntent);
+                getSupportActionBar().setTitle(titleFromIntent);
+            }
+
             clearHistory = true;
             runOnUiThread(() -> {
                 loading.setVisibility(View.VISIBLE);

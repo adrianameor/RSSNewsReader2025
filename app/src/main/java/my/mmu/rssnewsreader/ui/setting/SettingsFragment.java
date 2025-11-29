@@ -75,6 +75,15 @@ public class SettingsFragment extends PreferenceFragmentCompat {
                 case "jobPeriodic":
                     rssWorkManager.enqueueRssWorker();
                     break;
+                case "autoTranslate":
+                    // THIS IS THE FIX:
+                    // If the user turns on auto-translate, we immediately
+                    // run the worker to translate any existing articles.
+                    if (sharedPreferences.getBoolean(key, false)) {
+                        Log.d("SettingsFragment", "Auto-translate enabled. Enqueuing worker now.");
+                        rssWorkManager.enqueueRssWorker();
+                    }
+                    break;
                 case "night":
                     boolean night = sharedPreferencesRepository.getNight();
                     if (night) {

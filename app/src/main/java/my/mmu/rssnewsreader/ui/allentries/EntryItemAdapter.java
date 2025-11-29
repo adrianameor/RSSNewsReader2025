@@ -10,7 +10,6 @@ import android.view.ViewGroup;
 import android.widget.CheckBox;
 import android.widget.CompoundButton;
 import android.widget.ImageView;
-import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
@@ -19,9 +18,6 @@ import androidx.recyclerview.widget.DiffUtil;
 import androidx.recyclerview.widget.ListAdapter;
 import androidx.recyclerview.widget.RecyclerView;
 
-import my.mmu.rssnewsreader.R;
-import my.mmu.rssnewsreader.model.EntryInfo;
-
 import com.google.android.material.button.MaterialButton;
 import com.squareup.picasso.Picasso;
 
@@ -29,8 +25,12 @@ import java.util.Date;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
+import my.mmu.rssnewsreader.R;
+import my.mmu.rssnewsreader.model.EntryInfo;
+
 public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.EntryItemHolder> {
 
+    // The field is correctly named 'entryItemClickInterface'
     EntryItemClickInterface entryItemClickInterface;
     private Context context;
     private boolean isSelectionMode = false;
@@ -39,6 +39,7 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
 
     public EntryItemAdapter(EntryItemClickInterface entryItemClickInterface, boolean autoTranslateEnabled) {
         super(DIFF_CALLBACK);
+        // FIX: Assign the constructor parameter to the correct field.
         this.entryItemClickInterface = entryItemClickInterface;
         this.autoTranslateEnabled = autoTranslateEnabled;
     }
@@ -51,24 +52,36 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
 
         @Override
         public boolean areContentsTheSame(@NonNull EntryInfo oldE, @NonNull EntryInfo newE) {
-            boolean oldTranslated = hasTranslation(oldE);
-            boolean newTranslated = hasTranslation(newE);
+            // -- START DEBUGGING LOGS --
+            if (oldE.getEntryId() == newE.getEntryId()) { // Only log for the same item
+                boolean titlesAreDifferent = !java.util.Objects.equals(oldE.getTranslatedTitle(), newE.getTranslatedTitle());
+                if (titlesAreDifferent) {
+                    Log.d("DIFF_DEBUG", "Item " + oldE.getEntryId() + ": Translated titles have changed!");
+                    Log.d("DIFF_DEBUG", "  Old: '" + oldE.getTranslatedTitle() + "'");
+                    Log.d("DIFF_DEBUG", "  New: '" + newE.getTranslatedTitle() + "'");
+                }
+            }
 
-            boolean oldExtracted = !TextUtils.isEmpty(oldE.getContent());
-            boolean newExtracted = !TextUtils.isEmpty(newE.getContent());
+            // 1. Check if the titles have changed (original OR translated).
+            boolean sameTitle = java.util.Objects.equals(oldE.getEntryTitle(), newE.getEntryTitle()) &&
+                    java.util.Objects.equals(oldE.getTranslatedTitle(), newE.getTranslatedTitle());
 
-            boolean sameBookmark = Objects.equals(oldE.getBookmark(), newE.getBookmark());
-            boolean sameVisited  = Objects.equals(oldE.getVisitedDate(), newE.getVisitedDate());
+            // 2. Check if the descriptions have changed (original OR translated).
+            boolean sameDescription = java.util.Objects.equals(oldE.getEntryDescription(), newE.getEntryDescription()) &&
+                    java.util.Objects.equals(oldE.getTranslatedSummary(), newE.getTranslatedSummary());
 
-            return sameBookmark && sameVisited &&
-                    (oldTranslated == newTranslated) &&
-                    (oldExtracted  == newExtracted);
-        }
+            // 3. Check other UI-relevant states.
+            boolean sameBookmark = java.util.Objects.equals(oldE.getBookmark(), newE.getBookmark());
+            boolean sameVisited  = java.util.Objects.equals(oldE.getVisitedDate(), newE.getVisitedDate());
 
-        private boolean hasTranslation(EntryInfo e) {
-            String orig  = e.getOriginalHtml();
-            String trans = e.getHtml();
-            return trans != null && orig != null && !trans.equals(orig);
+            // If any of these are different, the contents are different.
+            boolean areTheSame = sameTitle && sameDescription && sameBookmark && sameVisited;
+
+            if (oldE.getEntryId() == newE.getEntryId() && !areTheSame) {
+                Log.d("DIFF_DEBUG", "Item " + oldE.getEntryId() + ": Contents are DIFFERENT. A redraw will be triggered.");
+            }
+
+            return areTheSame;
         }
     };
 
@@ -84,16 +97,13 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
     @Override
     public void onBindViewHolder(@NonNull EntryItemAdapter.EntryItemHolder holder, int position) {
         EntryInfo currentEntry = getItem(position);
-
-        boolean isLoading = currentEntry.isLoading();
-        Log.d(TAG, "onBindViewHolder: Position " + position + " - isLoading: " + isLoading);
-
         holder.bind(currentEntry);
     }
 
     public void exitSelectionMode() {
         isSelectionMode = false;
-        entryItemClickInterface.onSelectionModeChanged(isSelectionMode);
+        // FIX: Use the correct variable name 'entryItemClickInterface'
+        if(entryItemClickInterface != null) entryItemClickInterface.onSelectionModeChanged(false);
         notifyDataSetChanged();
     }
 
@@ -120,10 +130,16 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
         }
 
         public void bind(EntryInfo entryInfo) {
+            Log.d("TranslationDebug", "ADAPTER: Binding entry " + entryInfo.getEntryId() + ". Received translated title: " + entryInfo.getTranslatedTitle());
             TextView statusView = view.findViewById(R.id.extractionStatus);
 
             textViewEntryTitle.setTextColor(textViewEntryPubDate.getTextColors());
-            textViewEntryTitle.setText(entryInfo.getEntryTitle());
+            String titleToDisplay = entryInfo.getTranslatedTitle();
+            if (titleToDisplay == null || titleToDisplay.trim().isEmpty()) {
+                titleToDisplay = entryInfo.getEntryTitle();
+            }
+            textViewEntryTitle.setText(titleToDisplay);
+            Log.d("TranslationDebug", "ADAPTER: AFTER SETTING TEXT, TextView for entry " + entryInfo.getEntryId() + " now contains: '" + textViewEntryTitle.getText().toString() + "'");
             textViewFeedTitle.setText(entryInfo.getFeedTitle());
 
             String pubDate = covertTimeToText(entryInfo.getEntryPublishedDate());
@@ -140,20 +156,18 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
                 bookmarkButton.setIcon(ContextCompat.getDrawable(context, R.drawable.ic_bookmark_filled));
                 bookmarkButton.setIconTint(ContextCompat.getColorStateList(context, R.color.primary));
             }
-            bookmarkButton.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View view) {
-                    if (entryInfo.getBookmark() == null || entryInfo.getBookmark().equals("N")) {
-                        entryItemClickInterface.onBookmarkButtonClick("Y", entryInfo.getEntryId());
-                    } else {
-                        entryItemClickInterface.onBookmarkButtonClick("N", entryInfo.getEntryId());
-                    }
+
+            // FIX: Use the correct variable name 'entryItemClickInterface'
+            bookmarkButton.setOnClickListener(v -> {
+                if (entryItemClickInterface != null) {
+                    String newBookmarkState = (entryInfo.getBookmark() == null || entryInfo.getBookmark().equals("N")) ? "Y" : "N";
+                    entryItemClickInterface.onBookmarkButtonClick(newBookmarkState, entryInfo.getEntryId());
                 }
             });
 
-            moreButton.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View view) {
+            // FIX: Use the correct variable name 'entryItemClickInterface' and pass the correct arguments to match the interface
+            moreButton.setOnClickListener(v -> {
+                if (entryItemClickInterface != null) {
                     entryItemClickInterface.onMoreButtonClick(entryInfo.getEntryId(), entryInfo.getEntryLink(), entryInfo.getVisitedDate() == null);
                 }
             });
@@ -173,47 +187,44 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
 
             selectedCheckbox.setVisibility(isSelectionMode ? View.VISIBLE : View.GONE);
             selectedCheckbox.setChecked(entryInfo.isSelected());
-            selectedCheckbox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-                @Override
-                public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                    if (isSelectionMode) {
-                        entryInfo.setSelected(isChecked);
-                        entryItemClickInterface.onItemSelected(entryInfo);
-                    }
+            // FIX: Use the correct variable name 'entryItemClickInterface'
+            selectedCheckbox.setOnCheckedChangeListener((buttonView, isChecked) -> {
+                if (isSelectionMode && entryItemClickInterface != null) {
+                    entryInfo.setSelected(isChecked);
+                    entryItemClickInterface.onItemSelected(entryInfo);
                 }
             });
 
-            view.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View view) {
+            // FIX: Use the correct variable name 'entryItemClickInterface'
+            view.setOnClickListener(v -> {
+                if (entryItemClickInterface != null) {
                     entryItemClickInterface.onEntryClick(entryInfo);
                 }
             });
 
-            view.setOnLongClickListener(new View.OnLongClickListener() {
-                @Override
-                public boolean onLongClick(View view) {
-                    isSelectionMode = true;
-                    entryItemClickInterface.onSelectionModeChanged(true);
-                    notifyDataSetChanged();
-                    return true;
-                }
+            // FIX: Use the correct variable name 'entryItemClickInterface'
+            view.setOnLongClickListener(v -> {
+                isSelectionMode = true;
+                if(entryItemClickInterface != null) entryItemClickInterface.onSelectionModeChanged(true);
+                notifyDataSetChanged();
+                return true;
             });
 
             String content = entryInfo.getContent();
             int priority = entryInfo.getPriority();
             boolean hasOriginalHtml   = !TextUtils.isEmpty(entryInfo.getOriginalHtml());
-            boolean hasTranslatedHtml = !TextUtils.isEmpty(entryInfo.getHtml())
+            // THIS IS THE FIX: The definition of "translated" now also requires the title to be present.
+            boolean hasTranslatedHtml = (!TextUtils.isEmpty(entryInfo.getHtml())
                     && (entryInfo.getOriginalHtml() == null ||
-                    !entryInfo.getHtml().equals(entryInfo.getOriginalHtml()));
-
+                    !entryInfo.getHtml().equals(entryInfo.getOriginalHtml())))
+                    && !TextUtils.isEmpty(entryInfo.getTranslatedTitle());
             statusView.setText("");
 
             if (autoTranslateEnabled) {
-                if (hasOriginalHtml && hasTranslatedHtml) {
+                if (hasTranslatedHtml) {
                     statusView.setBackgroundResource(R.drawable.status_dot_green);
                     statusView.setVisibility(View.VISIBLE);
-                } else if ((!TextUtils.isEmpty(content)) || priority > 0) {
+                } else if (hasOriginalHtml) {
                     statusView.setBackgroundResource(R.drawable.status_dot_yellow);
                     statusView.setVisibility(View.VISIBLE);
                 }else {
@@ -237,24 +248,17 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
 
     public interface EntryItemClickInterface {
         void onEntryClick(EntryInfo entryInfo);
-
         void onMoreButtonClick(long entryId, String link, boolean unread);
-
         void onBookmarkButtonClick(String bool, long id);
-
         void onSelectionModeChanged(boolean isSelectionMode);
-
         void onItemSelected(EntryInfo entryInfo);
     }
 
     public String covertTimeToText(Date date) {
-
         String convTime = null;
         String suffix = "ago";
         Date nowTime = new Date();
-
         long dateDiff = nowTime.getTime() - date.getTime();
-
         long second = TimeUnit.MILLISECONDS.toSeconds(dateDiff);
         long minute = TimeUnit.MILLISECONDS.toMinutes(dateDiff);
         long hour = TimeUnit.MILLISECONDS.toHours(dateDiff);
@@ -277,7 +281,6 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
         } else {
             convTime = day + " days " + suffix;
         }
-
         return convTime;
     }
 }

@@ -97,21 +97,24 @@ public class WebViewViewModel extends ViewModel {
         _isTranslating.setValue(true);
 
         // 2. Give the work to the translator to do in a separate room.
-        disposables.add(translationRepository.translate(text, sourceLang, targetLang)
-                .subscribeOn(Schedulers.io()) // The separate room (a background thread)
-                .observeOn(AndroidSchedulers.mainThread()) // Bring the result to the main desk (the UI thread)
-                .subscribe(
-                        // 3. On Success: Write the result on the notepad.
-                        translatedText -> {
-                            _isTranslating.setValue(false); // Update status to "No"
-                            _translatedArticleContent.setValue(translatedText);
-                        },
-                        // 4. On Failure: Write the error on the notepad.
-                        error -> {
-                            _isTranslating.setValue(false); // Update status to "No"
-                            _translationError.setValue(error.getMessage());
-                        }
-                ));
+        disposables.add(
+                // Use the correct method name 'translateText'
+                translationRepository.translateText(text, sourceLang, targetLang)
+                        .subscribeOn(Schedulers.io()) // The separate room (a background thread)
+                        .observeOn(AndroidSchedulers.mainThread()) // Bring the result to the main desk (the UI thread)
+                        .subscribe(
+                                (String translatedText) -> { // Explicitly type the lambda parameter
+                                    // 3. On Success: Write the result on the notepad.
+                                    _isTranslating.setValue(false); // Update status to "No"
+                                    _translatedArticleContent.setValue(translatedText);
+                                },
+                                (Throwable error) -> { // Explicitly type the lambda parameter
+                                    // 4. On Failure: Write the error on the notepad.
+                                    _isTranslating.setValue(false); // Update status to "No"
+                                    _translationError.setValue(error.getMessage());
+                                }
+                        )
+        );
     }
 
     // Clean up the subscriptions when the ViewModel is no longer needed to prevent memory leaks.

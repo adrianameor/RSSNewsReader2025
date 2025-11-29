@@ -1,82 +1,109 @@
 package my.mmu.rssnewsreader.worker;
 
 import android.content.Context;
-import androidx.annotation.NonNull;
+import android.content.Intent;
+import android.util.Log;import androidx.annotation.NonNull;
+import androidx.hilt.work.HiltWorker;
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import androidx.work.Worker;
 import androidx.work.WorkerParameters;
+
+import com.google.android.gms.tasks.Tasks;
+import com.google.mlkit.nl.languageid.LanguageIdentification;
+import com.google.mlkit.nl.languageid.LanguageIdentifier;
+
+import java.util.List;
+import java.util.concurrent.ExecutionException;
+
+import javax.inject.Inject;
 
 import dagger.assisted.Assisted;
 import dagger.assisted.AssistedInject;
 import my.mmu.rssnewsreader.data.entry.EntryRepository;
 import my.mmu.rssnewsreader.data.repository.TranslationRepository;
-import my.mmu.rssnewsreader.model.EntryInfo; // THIS IS THE MISSING IMPORT
-import java.util.List;
-import android.util.Log;
-import androidx.hilt.work.HiltWorker;
+import my.mmu.rssnewsreader.data.sharedpreferences.SharedPreferencesRepository;
+import my.mmu.rssnewsreader.model.EntryInfo;
 
 @HiltWorker
 public class TranslationWorker extends Worker {
 
+    private static final String TAG = "TranslationWorker";
     private final EntryRepository entryRepository;
     private final TranslationRepository translationRepository;
+    private final SharedPreferencesRepository sharedPreferencesRepository;
+    private final LanguageIdentifier languageIdentifier;
 
     @AssistedInject
     public TranslationWorker(
             @Assisted @NonNull Context context,
             @Assisted @NonNull WorkerParameters workerParams,
             EntryRepository entryRepository,
-            TranslationRepository translationRepository) {
+            TranslationRepository translationRepository,
+            SharedPreferencesRepository sharedPreferencesRepository) {
         super(context, workerParams);
         this.entryRepository = entryRepository;
         this.translationRepository = translationRepository;
+        this.sharedPreferencesRepository = sharedPreferencesRepository;
+        this.languageIdentifier = LanguageIdentification.getClient();
     }
 
     @NonNull
     @Override
     public Result doWork() {
-        Log.d("TranslationWorker", "doWork: Worker started.");
-        // Use the correct method to get the info, including the language
-        List<EntryInfo> untranslatedEntries = entryRepository.getUntranslatedEntriesInfo();
-        Log.d("TranslationWorker", "doWork: Found " + untranslatedEntries.size() + " entries to process.");
+        Log.d(TAG, "WORKER: doWork started.");
+        List<EntryInfo> entriesToProcess = entryRepository.getUntranslatedEntriesInfo();
+        Log.d(TAG, "WORKER: Found " + entriesToProcess.size() + " entries that may need translation.");
 
+        String defaultTargetLang = sharedPreferencesRepository.getDefaultTranslationLanguage();
 
-        for (EntryInfo entry : untranslatedEntries) {
+        for (EntryInfo entry : entriesToProcess) {
             try {
-                Log.d("TranslationWorker", "doWork: Processing entry ID: " + entry.getEntryId());
+                String originalTitle = entry.getEntryTitle();
+                if (originalTitle == null || originalTitle.isEmpty()) {
+                    continue; // Skip if there's no title.
+                }
 
-                // Only proceed if the title or summary actually needs translation
-                if (entry.getTranslatedTitle() == null || entry.getTranslatedSummary() == null) {
-                    String sourceLang = entry.getFeedLanguage();
-                    // Use the per-article language if set, otherwise default to English for the background job
-                    String targetLang = entry.getTargetTranslationLanguage() != null ? entry.getTargetTranslationLanguage() : "en";
+                // THIS IS THE FIX: We are removing the complex, unreliable "hybrid" logic.
+                // We will now ONLY TRUST the language set for the entire feed (`feedLanguage`).
+                // This is a much more reliable signal and will prevent jumbled translations.
+                String sourceLang = entry.getFeedLanguage();
+                String targetLang = entry.getTargetTranslationLanguage() != null ? entry.getTargetTranslationLanguage() : defaultTargetLang;
 
-                    if (sourceLang == null || sourceLang.isEmpty() || sourceLang.equalsIgnoreCase(targetLang)) {
-                        continue; // Skip if we can't translate
-                    }
+                // Condition to check if translation is needed at all for this entry.
+                if (sourceLang == null || sourceLang.isEmpty() || sourceLang.equals("und") || sourceLang.equalsIgnoreCase(targetLang)) {
+                    Log.d(TAG, "WORKER: Skipping entry " + entry.getEntryId() + " (Source: " + sourceLang + ", Target: " + targetLang + " - no translation needed).");
+                    continue;
+                }
 
-                    // --- THIS IS THE FIX: We now make the calls BLOCKING ---
+                Log.d(TAG, "WORKER: Processing entry ID: " + entry.getEntryId() + " ('" + originalTitle + "') from " + sourceLang + " to " + targetLang);
 
-                    // Translate Title if it's missing
-                    if (entry.getTranslatedTitle() == null && entry.getEntryTitle() != null && !entry.getEntryTitle().isEmpty()) {
-                        // .blockingGet() forces the worker to WAIT here until the translation is complete.
-                        String translatedTitle = translationRepository.translate(entry.getEntryTitle(), sourceLang, targetLang).blockingGet();
-                        entryRepository.updateTranslatedTitle(translatedTitle, entry.getEntryId());
-                        Log.d("TranslationWorker", "doWork: Successfully updated title for entry " + entry.getEntryId());
-                    }
+                // Translate Title only if it's missing or empty.
+                if (entry.getTranslatedTitle() == null || entry.getTranslatedTitle().trim().isEmpty()) {
+                    String translatedTitle = translationRepository.translateText(originalTitle, sourceLang, targetLang).blockingGet();
+                    Log.d(TAG, "WORKER: For entry " + entry.getEntryId() + ", received translated title: '" + translatedTitle + "'");
+                    entryRepository.updateTranslatedTitle(translatedTitle, entry.getEntryId());
+                }
 
-                    // Translate Summary if it's missing
-                    if (entry.getTranslatedSummary() == null && entry.getEntryDescription() != null && !entry.getEntryDescription().isEmpty()) {
-                        // .blockingGet() forces the worker to WAIT here too.
-                        String translatedSummary = translationRepository.translate(entry.getEntryDescription(), sourceLang, targetLang).blockingGet();
+                // Translate Summary (Description) only if it's missing or empty.
+                if (entry.getTranslatedSummary() == null || entry.getTranslatedSummary().trim().isEmpty()) {
+                    if (entry.getEntryDescription() != null && !entry.getEntryDescription().isEmpty()) {
+                        String translatedSummary = translationRepository.translateText(entry.getEntryDescription(), sourceLang, targetLang).blockingGet();
                         entryRepository.updateTranslatedSummary(translatedSummary, entry.getEntryId());
-                        Log.d("TranslationWorker", "doWork: Successfully updated summary for entry " + entry.getEntryId());
                     }
                 }
+
             } catch (Exception e) {
-                // If one article fails, log it and continue to the next one.
-                Log.e("TranslationWorker", "Failed to translate title/summary for entry " + entry.getEntryId(), e);
+                Log.e(TAG, "WORKER: CRASHED while processing entry " + entry.getEntryId(), e);
             }
         }
+
+        Log.d(TAG, "WORKER: Finished processing all entries.");
+
+        // Send the "shout" to the UI to tell it to refresh.
+        Log.d(TAG, "Broadcasting 'translation-finished' event.");
+        Intent intent = new Intent("translation-finished");
+        LocalBroadcastManager.getInstance(getApplicationContext()).sendBroadcast(intent);
+
         return Result.success();
     }
 }

@@ -8,11 +8,14 @@ import dagger.Provides;
 import dagger.hilt.InstallIn;
 import dagger.hilt.components.SingletonComponent;
 import my.mmu.rssnewsreader.data.deepseek.DeepSeekApiService;
+import my.mmu.rssnewsreader.data.repository.TranslationRepository; // Import the missing class
 import okhttp3.OkHttpClient;
 import okhttp3.logging.HttpLoggingInterceptor;
 import retrofit2.Retrofit;
 import retrofit2.adapter.rxjava3.RxJava3CallAdapterFactory;
 import retrofit2.converter.gson.GsonConverterFactory;
+import my.mmu.rssnewsreader.data.repository.TranslationRepository;
+
 
 @Module
 @InstallIn(SingletonComponent.class)
@@ -49,4 +52,12 @@ public class NetworkModule {
     public DeepSeekApiService provideDeepSeekApiService(Retrofit retrofit) {
         return retrofit.create(DeepSeekApiService.class);
     }
+
+    // This is the blueprint that tells Hilt how to build a TranslationRepository.
+    @Provides
+    @Singleton
+    public static TranslationRepository provideTranslationRepository(DeepSeekApiService deepSeekApiService) {
+        return new TranslationRepository(deepSeekApiService);
+    }
+
 }

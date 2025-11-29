@@ -52,10 +52,12 @@ import javax.inject.Inject;
 import javax.inject.Singleton;
 
 import dagger.hilt.android.qualifiers.ApplicationContext;
+import io.reactivex.rxjava3.disposables.CompositeDisposable;
 
 @Singleton
 public class TtsExtractor {
 
+    private final CompositeDisposable disposables = new CompositeDisposable();
     private final String TAG = TtsExtractor.class.getSimpleName();
     private String currentLanguage;
     private boolean isLockedByTtsPlayer = false;
@@ -163,67 +165,62 @@ public class TtsExtractor {
     }
 
     private void translateHtml(String html, String content, final long currentIdInProgress, String currentTitle) {
+        // THIS IS THE FINAL, UNIFIED FIX
+        // This method will now translate both the title and the body at the same time,
+        // solving all the race conditions and delays.
+
         String sourceLanguage = textUtil.identifyLanguageRx(content).blockingGet();
         String targetLanguage = sharedPreferencesRepository.getDefaultTranslationLanguage();
         setCurrentLanguage(targetLanguage, false);
 
-        if (!sourceLanguage.equals(targetLanguage)) {
-            Log.d(TAG, "translateHtml: translating from " + sourceLanguage + " to " + targetLanguage);
+        if (currentTitle != null && !sourceLanguage.equalsIgnoreCase(targetLanguage)) {
+            Log.d(TAG, "translateHtml: Translating ID " + currentIdInProgress + " from " + sourceLanguage + " to " + targetLanguage);
 
-            String method = sharedPreferencesRepository.getTranslationMethod();
-            Single<String> translationSingle;
+            // 1. Create two separate background jobs: one for the title, one for the body.
+            Single<String> titleTranslationJob = textUtil.translateText(sourceLanguage, targetLanguage, currentTitle);
+            Single<String> bodyTranslationJob = textUtil.translateHtml(sourceLanguage, targetLanguage, html, progress -> {});
 
-            if ("lineByLine".equalsIgnoreCase(method)) {
-                translationSingle = textUtil.translateHtmlLineByLine(
-                        sourceLanguage,
-                        targetLanguage,
-                        html,
-                        currentTitle,
-                        currentIdInProgress
-                );
-            } else if ("paragraphByParagraph".equalsIgnoreCase(method)) {
-                translationSingle = textUtil.translateHtmlByParagraph(
-                        sourceLanguage,
-                        targetLanguage,
-                        html,
-                        currentTitle,
-                        currentIdInProgress,
-                        progress -> {}
-                );
-            } else {
-                translationSingle = textUtil.translateHtmlAllAtOnce(
-                        sourceLanguage,
-                        targetLanguage,
-                        html,
-                        currentTitle,
-                        currentIdInProgress,
-                        progress -> {}
-                );
-            }
+            // 2. Use Single.zip to run both jobs and wait until BOTH are complete.
+            disposables.add(Single.zip(
+                            titleTranslationJob,
+                            bodyTranslationJob,
+                            // 3. This 'BiFunction' runs only when both jobs have succeeded.
+                            (translatedTitle, translatedBodyHtml) -> {
+                                Log.d("TranslationDebug", "TTSExtractor: Translation successful for ID: " + currentIdInProgress);
+                                Log.d("TranslationDebug", "TTSExtractor: Received Translated Title: '" + translatedTitle + "'");
 
-            translationSingle
+                                // 4. Save the results to the database together.
+                                entryRepository.updateTranslatedTitle(translatedTitle, currentIdInProgress);
+                                entryRepository.updateHtml(translatedBodyHtml, currentIdInProgress);
+
+                                // 5. Extract and save plain text for search and summary.
+                                org.jsoup.nodes.Document doc = org.jsoup.Jsoup.parse(translatedBodyHtml);
+                                String translatedBodyText = textUtil.extractHtmlContent(doc.body().html(), delimiter);
+                                entryRepository.updateTranslatedSummary(translatedBodyText, currentIdInProgress);
+                                entryRepository.updateTranslated(translatedTitle + "\n\n" + translatedBodyText, currentIdInProgress);
+
+                                return true; // Return a value to satisfy the BiFunction
+                            })
                     .subscribeOn(Schedulers.io())
                     .observeOn(AndroidSchedulers.mainThread())
                     .subscribe(
-                            translatedHtml -> {
-                                entryRepository.updateHtml(translatedHtml, currentIdInProgress);
-                                String translatedContent = textUtil.extractHtmlContent(translatedHtml, delimiter);
-                                entryRepository.updateTranslatedText(translatedContent, currentIdInProgress);
-                                entryRepository.updateTranslated(translatedContent, currentIdInProgress);
+                            success -> {
+                                // This runs after everything has been saved.
+                                Log.d(TAG, "Successfully translated and saved article ID: " + currentIdInProgress);
                                 setCurrentLanguage(targetLanguage, true);
-
                                 if (!sharedPreferencesRepository.hasTranslationToggle(currentIdInProgress)) {
                                     sharedPreferencesRepository.setIsTranslatedView(currentIdInProgress, true);
-                                    Log.d(TAG, "[translateHtml] Defaulting to translated view since this is first-time translation.");
                                 }
-
-                                Log.d(TAG, "translateHtml: translation completed and saved");
                             },
-                            throwable -> {
-                                Log.e(TAG, "translateHtml: error translating", throwable);
-                                failedIds.add(currentIdInProgress);
+                            error -> {
+                                // This runs if either the title or body translation fails.
+                                Log.e(TAG, "Failed to zip and translate article ID: " + currentIdInProgress, error);
+                                if (!failedIds.contains(currentIdInProgress)) {
+                                    failedIds.add(currentIdInProgress);
+                                }
                             }
-                    );
+                    )
+            );
         }
     }
 

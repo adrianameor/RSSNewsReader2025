@@ -22,15 +22,23 @@ public interface DeepSeekApiService {
         public List<Message> messages;
         public double temperature = 0.7;
 
-        public DeepSeekRequest(String htmlToTranslate, String sourceLang, String targetLang) {
-            // This is the new, smarter prompt for translating HTML content.
-            String prompt = String.format(
-                "You are an expert HTML translator. Translate the text content within the following HTML from %s to %s. " +
-                "Crucially, do not change any HTML tags or their attributes. Maintain the original HTML structure perfectly. " +
-                "Only translate the human-readable text between the tags. Do not translate proper nouns or technical terms. " +
-                "Only provide the translated HTML, with no additional explanations or introductions. Here is the HTML to translate:\n\n%s",
-                sourceLang, targetLang, htmlToTranslate
-            );
+        // This single constructor now handles both plain text and HTML
+        public DeepSeekRequest(String textToTranslate, String sourceLang, String targetLang, boolean isHtml) {
+            String prompt;
+            if (isHtml) {
+                prompt = String.format(
+                        "You are an expert HTML translator. Translate the text content within the following HTML from %s to %s. " +
+                                "Crucially, do not change any HTML tags or their attributes. Maintain the original HTML structure perfectly. " +
+                                "Only translate the human-readable text between the tags. Do not translate proper nouns or technical terms. " +
+                                "Only provide the translated HTML, with no additional explanations or introductions. Here is the HTML to translate:\n\n%s",
+                        sourceLang, targetLang, textToTranslate
+                );
+            } else {
+                prompt = String.format(
+                        "Translate the following text from %s to %s. Do not translate proper nouns or technical terms. Only provide the translation, with no additional explanations. Text: %s",
+                        sourceLang, targetLang, textToTranslate
+                );
+            }
             this.messages = List.of(new Message("user", prompt));
         }
     }

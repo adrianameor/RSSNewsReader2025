@@ -12,7 +12,8 @@ import io.reactivex.rxjava3.schedulers.Schedulers;
 import my.mmu.rssnewsreader.data.entry.Entry;
 import my.mmu.rssnewsreader.data.entry.EntryRepository;
 import my.mmu.rssnewsreader.data.sharedpreferences.SharedPreferencesRepository;
-import my.mmu.rssnewsreader.service.util.TextUtil;
+import io.reactivex.rxjava3.disposables.CompositeDisposable;
+import my.mmu.rssnewsreader.model.EntryInfo;
 
 public class AutoTranslator {
     private static final String TAG = "AutoTranslator";
@@ -21,6 +22,7 @@ public class AutoTranslator {
     private final TextUtil textUtil;
     private final SharedPreferencesRepository prefs;
     private final String delimiter = "--####--";
+    private final CompositeDisposable disposables = new CompositeDisposable();
 
     public AutoTranslator(EntryRepository entryRepository, TextUtil textUtil, SharedPreferencesRepository prefs) {
         this.entryRepository = entryRepository;
@@ -30,83 +32,96 @@ public class AutoTranslator {
 
     public void runAutoTranslation(@Nullable Runnable onComplete) {
         if (!prefs.getAutoTranslate()) {
-            Log.d(TAG, "Auto-translate disabled by user.");
+            if (onComplete != null) onComplete.run();
+            disposables.dispose();
             return;
         }
 
-        List<Entry> untranslatedEntries = entryRepository.getUntranslatedEntries();
+        List<EntryInfo> untranslatedEntries = entryRepository.getUntranslatedEntriesInfo();
         AtomicInteger remaining = new AtomicInteger(untranslatedEntries.size());
 
-        if (untranslatedEntries.isEmpty() && onComplete != null) {
-            onComplete.run();
+        if (untranslatedEntries.isEmpty()) {
+            Log.d("AUTOTRANSLATOR_DEBUG", "No new entries to translate.");
+            if (onComplete != null) onComplete.run();
+            disposables.dispose();
             return;
         }
 
-        for (Entry entry : untranslatedEntries) {
-            String html = entry.getHtml();
-            String content = entry.getContent();
-            String title = entry.getTitle();
-            long id = entry.getId();
+        Log.d("AUTOTRANSLATOR_DEBUG", "Found " + untranslatedEntries.size() + " entries to process.");
 
-            if (html != null && !html.contains("translated-title")) {
-                textUtil.identifyLanguageRx(content)
+        for (EntryInfo entry : untranslatedEntries) {
+            long id = entry.getEntryId();
+            String title = entry.getEntryTitle();
+            // This was a bug from before, ensure we get the ORIGINAL html to translate
+            String html = entryRepository.getOriginalHtmlById(id);
+            String content = entry.getContent();
+
+            Log.d("AUTOTRANSLATOR_DEBUG", "Looping for entry ID: " + id + ". Starting processing.");
+
+            if (html != null && title != null && !title.trim().isEmpty()) {
+                Log.d("AUTOTRANSLATOR_DEBUG", "ID: " + id + " - Calling identifyLanguageRx...");
+
+                disposables.add(textUtil.identifyLanguageRx(content)
                         .subscribeOn(Schedulers.io())
                         .observeOn(AndroidSchedulers.mainThread())
                         .subscribe(sourceLang -> {
+                            Log.d("AUTOTRANSLATOR_DEBUG", "ID: " + id + " - Language identified as: '" + sourceLang + "'. Checking if translation is needed.");
                             String targetLang = prefs.getDefaultTranslationLanguage();
+
                             if (!sourceLang.equalsIgnoreCase(targetLang)) {
-                                String method = prefs.getTranslationMethod();
-                                Single<String> translationSingle;
+                                Log.d("AUTOTRANSLATOR_DEBUG", "ID: " + id + " - Translation needed. Starting translation jobs.");
+                                Single<String> titleTranslationJob = textUtil.translateText(sourceLang, targetLang, title);
+                                Single<String> bodyTranslationJob = textUtil.translateHtml(sourceLang, targetLang, html, progress -> {});
 
-                                if ("lineByLine".equalsIgnoreCase(method)) {
-                                    translationSingle = textUtil.translateHtmlLineByLine(sourceLang, targetLang, html, title, id);
-                                } else if ("paragraphByParagraph".equalsIgnoreCase(method)) {
-                                    translationSingle = textUtil.translateHtmlByParagraph(sourceLang, targetLang, html, title, id, progress-> {});
-                                } else {
-                                    translationSingle = textUtil.translateHtmlAllAtOnce(sourceLang, targetLang, html, title, id, progress -> {});
-                                }
+                                disposables.add(Single.zip(
+                                                titleTranslationJob,
+                                                bodyTranslationJob,
+                                                (translatedTitle, translatedBodyHtml) -> {
+                                                    Log.d("AUTOTRANSLATOR_DEBUG", "--- Translation successful for ID: " + id + " ---");
+                                                    Log.d("AUTOTRANSLATOR_DEBUG", "Received Translated Title: '" + translatedTitle + "'");
 
-                                translationSingle.subscribe(translatedHtml -> {
-                                    String existingOriginal = entryRepository.getOriginalHtmlById(id);
-                                    if ((existingOriginal == null || existingOriginal.trim().isEmpty()) && html != null && !html.trim().isEmpty()) {
-                                        entryRepository.updateOriginalHtml(html, id);
-                                    }
-                                    entryRepository.updateHtml(translatedHtml, id);
-                                    String translatedContent = textUtil.extractHtmlContent(translatedHtml, delimiter);
-                                    entryRepository.updateTranslatedText(translatedContent, id);
-                                    entryRepository.updateTranslated(translatedContent, id);
-                                    entry.setHtml(translatedHtml);
-                                    entry.setTranslated(translatedContent);
-                                    Log.d(TAG, "Original HTML saved:\n" + html);
-                                    Log.d(TAG, "Translated HTML saved:\n" + translatedHtml);
+                                                    entryRepository.updateTranslatedTitle(translatedTitle, id);
+                                                    entryRepository.updateHtml(translatedBodyHtml, id);
 
-                                    Log.d(TAG, "Translated article ID: " + id);
-                                    if (remaining.decrementAndGet() == 0 && onComplete != null) {
-                                        onComplete.run();
-                                    }
-
-                                }, error -> {
-                                    Log.e(TAG, "Failed to translate article ID: " + id, error);
-                                    if (remaining.decrementAndGet() == 0 && onComplete != null) {
-                                        onComplete.run();
-                                    }
-                                });
-
+                                                    org.jsoup.nodes.Document doc = org.jsoup.Jsoup.parse(translatedBodyHtml);
+                                                    String translatedBodyText = textUtil.extractHtmlContent(doc.body().html(), delimiter);
+                                                    entryRepository.updateTranslatedSummary(translatedBodyText, id);
+                                                    entryRepository.updateTranslated(translatedTitle + "\n\n" + translatedBodyText, id);
+                                                    return true;
+                                                })
+                                        .subscribe(success -> {
+                                            Log.d(TAG, "Successfully translated and saved article ID: " + id);
+                                            if (remaining.decrementAndGet() == 0 && onComplete != null) {
+                                                onComplete.run();
+                                                disposables.dispose();
+                                            }
+                                        }, error -> {
+                                            Log.e("AUTOTRANSLATOR_DEBUG", "Translation API failed for ID: " + id, error);
+                                            if (remaining.decrementAndGet() == 0 && onComplete != null) {
+                                                onComplete.run();
+                                                disposables.dispose();
+                                            }
+                                        })
+                                );
                             } else {
+                                Log.d("AUTOTRANSLATOR_DEBUG", "ID: " + id + " - Source language is same as target. Skipping.");
                                 if (remaining.decrementAndGet() == 0 && onComplete != null) {
                                     onComplete.run();
+                                    disposables.dispose();
                                 }
                             }
-
                         }, error -> {
-                            Log.e(TAG, "Language detection failed for article ID: " + id, error);
+                            Log.e("AUTOTRANSLATOR_DEBUG", "Language detection failed for ID: " + id, error);
                             if (remaining.decrementAndGet() == 0 && onComplete != null) {
                                 onComplete.run();
+                                disposables.dispose();
                             }
-                        });
+                        }));
             } else {
+                Log.w("AUTOTRANSLATOR_DEBUG", "Skipping entry ID: " + id + " due to null html or title.");
                 if (remaining.decrementAndGet() == 0 && onComplete != null) {
                     onComplete.run();
+                    disposables.dispose();
                 }
             }
         }

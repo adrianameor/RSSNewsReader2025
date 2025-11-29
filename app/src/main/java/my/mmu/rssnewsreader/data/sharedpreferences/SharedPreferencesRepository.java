@@ -2,45 +2,36 @@ package my.mmu.rssnewsreader.data.sharedpreferences;
 
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.util.Log;
-
 import androidx.preference.PreferenceManager;
-
 import javax.inject.Inject;
-
 import dagger.hilt.android.qualifiers.ApplicationContext;
 
 public class SharedPreferencesRepository {
 
-    private static final String TAG = "SharedPreferencesRepository";
-    private SharedPreferences sharedPreferences;
-    private SharedPreferences.Editor editor;
-    private final Context context;
-    private static final String KEY_TOGGLE_STATE_PREFIX = "is_translated_view_";
-    private static final String KEY_SCROLL_X_PREFIX = "scroll_x_";
-    private static final String KEY_SCROLL_Y_PREFIX = "scroll_y_";
-    private static final String KEY_WEB_VIEW_MODE = "web_view_mode_";
-    private static final String KEY_CURRENT_READING_ENTRY_ID = "current_reading_entry_id";
+    private final SharedPreferences sharedPreferences;
 
     @Inject
     public SharedPreferencesRepository(@ApplicationContext Context context) {
-        this.context = context;
         sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context);
-        editor = sharedPreferences.edit();
     }
+
+    // --- HELPER METHOD FOR SAFE, SYNCHRONOUS EDITING ---
+    private SharedPreferences.Editor getEditor() {
+        return sharedPreferences.edit();
+    }
+
+    // --- ALL SETTER METHODS NOW USE THE SAFE, SYNCHRONOUS .commit() ---
 
     public int getJobPeriodic() {
         return Integer.parseInt(sharedPreferences.getString("jobPeriodic", "0"));
     }
 
     public void setInitialJobPeriodic() {
-        editor.putString("jobPeriodic", "360");
-        editor.apply();
+        getEditor().putString("jobPeriodic", "360").commit();
     }
 
     public void setJobPeriodic(String jobPeriodic) {
-        editor.putString("jobPeriodic", jobPeriodic);
-        editor.apply();
+        getEditor().putString("jobPeriodic", jobPeriodic).commit();
     }
 
     public boolean getNight() {
@@ -48,8 +39,7 @@ public class SharedPreferencesRepository {
     }
 
     public void setNight(boolean isNight) {
-        editor.putBoolean("night", isNight);
-        editor.apply();
+        getEditor().putBoolean("night", isNight).commit();
     }
 
     public boolean getDisplaySummary() {
@@ -57,8 +47,7 @@ public class SharedPreferencesRepository {
     }
 
     public void setDisplaySummary(boolean displaySummary) {
-        editor.putBoolean("displaySummary", displaySummary);
-        editor.apply();
+        getEditor().putBoolean("displaySummary", displaySummary).commit();
     }
 
     public boolean getHighlightText() {
@@ -66,13 +55,11 @@ public class SharedPreferencesRepository {
     }
 
     public void setHighlightText(boolean highlightText) {
-        editor.putBoolean("highlightText", highlightText);
-        editor.apply();
+        getEditor().putBoolean("highlightText", highlightText).commit();
     }
 
     public void setTextZoom(int textZoom) {
-        editor.putInt("textZoom", textZoom);
-        editor.apply();
+        getEditor().putInt("textZoom", textZoom).commit();
     }
 
     public int getTextZoom() {
@@ -80,8 +67,7 @@ public class SharedPreferencesRepository {
     }
 
     public void setSortBy(String sortBy) {
-        editor.putString("sortBy", sortBy);
-        editor.apply();
+        getEditor().putString("sortBy", sortBy).commit();
     }
 
     public String getSortBy() {
@@ -93,8 +79,7 @@ public class SharedPreferencesRepository {
     }
 
     public void setConfidenceThreshold(int confidenceThreshold) {
-        editor.putInt("confidenceThreshold", confidenceThreshold);
-        editor.apply();
+        getEditor().putInt("confidenceThreshold", confidenceThreshold).commit();
     }
 
     public boolean getBackgroundMusic() {
@@ -102,8 +87,7 @@ public class SharedPreferencesRepository {
     }
 
     public void setBackgroundMusic(boolean backgroundMusic) {
-        editor.putBoolean("backgroundMusic", backgroundMusic);
-        editor.apply();
+        getEditor().putBoolean("backgroundMusic", backgroundMusic).commit();
     }
 
     public String getBackgroundMusicFile() {
@@ -111,8 +95,7 @@ public class SharedPreferencesRepository {
     }
 
     public void setBackgroundMusicFile(String file) {
-        editor.putString("backgroundMusicFile", file);
-        editor.apply();
+        getEditor().putString("backgroundMusicFile", file).commit();
     }
 
     public int getBackgroundMusicVolume() {
@@ -120,8 +103,7 @@ public class SharedPreferencesRepository {
     }
 
     public void setBackgroundMusicVolume(int volume) {
-        editor.putInt("backgroundMusicVolume", volume);
-        editor.apply();
+        getEditor().putInt("backgroundMusicVolume", volume).commit();
     }
 
     public int getEntriesLimitPerFeed() {
@@ -129,8 +111,7 @@ public class SharedPreferencesRepository {
     }
 
     public void setEntriesLimitPerFeed(int limit) {
-        editor.putInt("entriesLimitPerFeed", limit);
-        editor.apply();
+        getEditor().putInt("entriesLimitPerFeed", limit).commit();
     }
 
     public boolean getIsPausedManually() {
@@ -138,16 +119,17 @@ public class SharedPreferencesRepository {
     }
 
     public void setIsPausedManually(boolean isPaused) {
-        editor.putBoolean("isPausedManually", isPaused);
-        editor.apply();
+        getEditor().putBoolean("isPausedManually", isPaused).commit();
     }
 
     public String getDefaultTranslationLanguage() {
         return sharedPreferences.getString("defaultTranslationLanguage", "zh");
     }
 
+
+
     public void setDefaultTranslationLanguage(String language) {
-        sharedPreferences.edit().putString("target_language", language).apply();
+        getEditor().putString("defaultTranslationLanguage", language).commit();
     }
 
     public String getTranslationMethod() {
@@ -155,8 +137,7 @@ public class SharedPreferencesRepository {
     }
 
     public void setTranslationMethod(String method) {
-        editor.putString("translationMethod", method);
-        editor.apply();
+        getEditor().putString("translationMethod", method).commit();
     }
 
     public boolean getAutoTranslate() {
@@ -164,53 +145,50 @@ public class SharedPreferencesRepository {
     }
 
     public void setAutoTranslate(boolean autoTranslate) {
-        editor.putBoolean("autoTranslate", autoTranslate);
-        editor.apply();
+        getEditor().putBoolean("autoTranslate", autoTranslate).commit();
     }
 
     public void setIsTranslatedView(long entryId, boolean isTranslatedView) {
-        sharedPreferences.edit()
-                .putBoolean(KEY_TOGGLE_STATE_PREFIX + entryId, isTranslatedView)
-                .apply();
+        getEditor().putBoolean("is_translated_view_" + entryId, isTranslatedView).commit();
     }
 
     public boolean getIsTranslatedView(long entryId) {
-        return sharedPreferences.getBoolean(KEY_TOGGLE_STATE_PREFIX + entryId,false);
+        return sharedPreferences.getBoolean("is_translated_view_" + entryId,false);
     }
 
     public boolean hasTranslationToggle(long entryId) {
-        return sharedPreferences.contains(KEY_TOGGLE_STATE_PREFIX + entryId);
+        return sharedPreferences.contains("is_translated_view_" + entryId);
     }
 
     public void setScrollX(long entryId, int value) {
-        sharedPreferences.edit().putInt(KEY_SCROLL_X_PREFIX + entryId, value).apply();
+        getEditor().putInt("scroll_x_" + entryId, value).commit();
     }
 
     public void setScrollY(long entryId, int value) {
-        sharedPreferences.edit().putInt(KEY_SCROLL_Y_PREFIX + entryId, value).apply();
+        getEditor().putInt("scroll_y_" + entryId, value).commit();
     }
 
     public int getScrollX(long entryId) {
-        return sharedPreferences.getInt(KEY_SCROLL_X_PREFIX + entryId, 0);
+        return sharedPreferences.getInt("scroll_x_" + entryId, 0);
     }
 
     public int getScrollY(long entryId) {
-        return sharedPreferences.getInt(KEY_SCROLL_Y_PREFIX + entryId, 0);
+        return sharedPreferences.getInt("scroll_y_" + entryId, 0);
     }
 
     public void setWebViewMode(long entryId, boolean isWebViewMode) {
-        sharedPreferences.edit().putBoolean(KEY_WEB_VIEW_MODE + entryId, isWebViewMode).apply();
+        getEditor().putBoolean("web_view_mode_" + entryId, isWebViewMode).commit();
     }
 
     public boolean getWebViewMode(long entryId) {
-        return sharedPreferences.getBoolean(KEY_WEB_VIEW_MODE + entryId, false); // default to offline mode
+        return sharedPreferences.getBoolean("web_view_mode_" + entryId, false);
     }
 
     public void setCurrentReadingEntryId(long entryId) {
-        sharedPreferences.edit().putLong(KEY_CURRENT_READING_ENTRY_ID, entryId).apply();
+        getEditor().putLong("current_reading_entry_id", entryId).commit();
     }
 
     public long getCurrentReadingEntryId() {
-        return sharedPreferences.getLong(KEY_CURRENT_READING_ENTRY_ID, -1);
+        return sharedPreferences.getLong("current_reading_entry_id", -1);
     }
 }

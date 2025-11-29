@@ -2,6 +2,7 @@ package my.mmu.rssnewsreader.ui.allentries;
 
 import android.content.Context;
 import android.content.Intent;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -14,6 +15,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
 import android.widget.Toast;
+import my.mmu.rssnewsreader.data.repository.TranslationRepository;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -53,6 +55,7 @@ import com.google.android.material.snackbar.Snackbar;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -63,10 +66,14 @@ import javax.inject.Inject;
 
 import dagger.hilt.android.AndroidEntryPoint;
 import my.mmu.rssnewsreader.ui.webview.WebViewViewModel;
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
+import android.content.BroadcastReceiver;
+import android.content.IntentFilter;
 
 @AndroidEntryPoint
 public class AllEntriesFragment extends Fragment implements EntryItemAdapter.EntryItemClickInterface, FilterBottomSheet.FilterClickInterface, EntryItemDialog.EntryItemDialogClickInterface {
 
+    private BroadcastReceiver translationFinishedReceiver;
     private static final String TAG = AllEntriesFragment.class.getSimpleName();
     private FragmentAllEntriesBinding binding;
     private SwipeRefreshLayout swipeRefreshLayout;
@@ -84,6 +91,8 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
     private AutoTranslator autoTranslator;
 
     @Inject
+    TextUtil textUtil;
+    @Inject
     TtsPlaylist ttsPlaylist;
     @Inject
     TtsPlayer ttsPlayer;
@@ -91,6 +100,9 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
     SharedPreferencesRepository sharedPreferencesRepository;
     @Inject
     EntryRepository entryRepository;
+    @Inject
+    TranslationRepository translationRepository;
+
 
     private boolean isSelectionMode = false;
     private WebViewViewModel webViewViewModel;
@@ -104,8 +116,7 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
     ) {
 
         binding = FragmentAllEntriesBinding.inflate(inflater, container, false);
-
-        allEntriesViewModel = new ViewModelProvider(this).get(AllEntriesViewModel.class);
+        allEntriesViewModel = new ViewModelProvider(requireActivity()).get(AllEntriesViewModel.class);
         unreadTextView = binding.unread;
 
         ConstraintLayout emptyContainer = binding.emptyContainer;
@@ -183,26 +194,32 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
 
         allEntriesViewModel.getAllEntries().observe(getViewLifecycleOwner(), new Observer<List<EntryInfo>>() {
             @Override
-            public void onChanged(List<EntryInfo> entryInfos) {
-                entries = entryInfos;
+            public void onChanged(List<EntryInfo> newEntries) {
+                // THIS IS THE FIX
+                // When the LiveData changes (either on startup or after our broadcast),
+                // we receive the new, updated list here.
+                Log.d("TranslationDebug", "ADAPTER OBSERVER: Received new list with " + newEntries.size() + " entries.");
 
-                for (EntryInfo entry : entries) {
-                    Log.d("ENTRY_CHECK", "Entry: " + entry.getEntryTitle() + ", FeedTitle: " + entry.getFeedTitle() + ", FeedID: " + entry.getFeedId());
+                // Sort the new list based on the user's preference
+                if (sortBy.equals("oldest")) {
+                    Collections.sort(newEntries, new EntryInfo.OldestComparator());
+                } else {
+                    Collections.sort(newEntries, new EntryInfo.LatestComparator());
                 }
 
-                if (entries.size() == 0) {
+                //Update the UI with the new, sorted Files.list.
+                // This will trigger the DiffUtil and update only the items that have changed.
+                adapter.submitList(new ArrayList<>(newEntries));
+                entries = newEntries; // Update the local copy
+
+                // Handle the empty state view
+                if (newEntries.isEmpty()) {
                     entriesRecycler.setVisibility(View.GONE);
                     emptyContainer.setVisibility(View.VISIBLE);
                 } else {
                     emptyContainer.setVisibility(View.GONE);
                     entriesRecycler.setVisibility(View.VISIBLE);
-                    if (sortBy.equals("oldest")) {
-                        Collections.sort(entries, new EntryInfo.OldestComparator());
-                    } else {
-                        Collections.sort(entries, new EntryInfo.LatestComparator());
-                    }
                 }
-                adapter.submitList(new ArrayList<>(entries));
             }
         });
 
@@ -211,45 +228,46 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
         return binding.getRoot();
     }
 
+    @Override
     public void onViewCreated(@NonNull View view, Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
 
+        // This block handles setting the title and triggering the FIRST data load.
         if (getArguments() != null) {
             String newTitle = getArguments().getString("title");
             feedId = getArguments().getLong("id");
-
             if (newTitle != null) {
                 title = newTitle;
                 binding.filterTitle.setText(title);
+                // Trigger the initial data load. The observer in onCreateView will handle the result.
                 allEntriesViewModel.getEntriesByFeed(feedId, filterBy);
-
-                allEntriesViewModel.getAllEntries().observe(getViewLifecycleOwner(), entries -> {
-                    this.entries = entries;
-                    adapter.submitList(entries);
-
-                    if (autoTranslator != null) {
-                        autoTranslator.runAutoTranslation(() -> {
-                            adapter.submitList(new ArrayList<>(entries));
-                        });
-                    } else {
-                        Log.e("AutoTranslator", "autoTranslator is null when attempting to translate");
-                    }
-                });
             }
         } else {
             title = "All feeds";
         }
 
+        if (autoTranslator != null && sharedPreferencesRepository.getAutoTranslate()) {
+            // THIS IS THE FIX:
+            // We provide a simple callback. When the AutoTranslator finishes its background work,
+            // this callback will run on the main thread and tell the ViewModel to fetch the new,
+            // translated data. The existing observer in onCreateView will then update the UI.
+            // This is simpler and more reliable than the broadcast receiver.
+            autoTranslator.runAutoTranslation(() -> {
+                Log.d("TranslationDebug", "AutoTranslator onComplete callback fired. Refreshing entries.");
+                if (allEntriesViewModel != null) {
+                    allEntriesViewModel.getEntriesByFeed(feedId, filterBy);
+                }
+            });
+        }
+
+        // --- All the original NavController and MenuProvider logic remains unchanged ---
         NavController navController = Navigation.findNavController(view);
 
-        binding.goToAddFeedButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                NavOptions navOptions = new NavOptions.Builder()
-                        .setPopUpTo(R.id.feedFragment, false)
-                        .build();
-                navController.navigate(R.id.feedFragment, null, navOptions);
-            }
+        binding.goToAddFeedButton.setOnClickListener(v -> {
+            NavOptions navOptions = new NavOptions.Builder()
+                    .setPopUpTo(R.id.feedFragment, false)
+                    .build();
+            navController.navigate(R.id.feedFragment, null, navOptions);
         });
 
         requireActivity().addMenuProvider(new MenuProvider() {
@@ -260,24 +278,21 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
                     enterSelectionMode();
                 } else {
                     menuInflater.inflate(R.menu.top_app_bar_main, menu);
-
                     MenuItem menuItem = menu.findItem(R.id.search);
                     SearchView searchView = (SearchView) menuItem.getActionView();
                     searchView.setQueryHint("Type here to search");
-
                     searchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
                         @Override
-                        public boolean onQueryTextSubmit(String query) {
-                            return false;
-                        }
-
+                        public boolean onQueryTextSubmit(String query) { return false; }
                         @Override
                         public boolean onQueryTextChange(String newText) {
                             final String query = newText.toLowerCase(Locale.ROOT);
                             final List<EntryInfo> filteredEntries = new ArrayList<>();
-                            for (EntryInfo entryInfo : entries) {
-                                final String entryTitle = entryInfo.getEntryTitle().toLowerCase(Locale.ROOT);
-                                if (entryTitle.contains(query)) filteredEntries.add(entryInfo);
+                            if (entries != null) {
+                                for (EntryInfo entryInfo : entries) {
+                                    final String entryTitle = entryInfo.getEntryTitle().toLowerCase(Locale.ROOT);
+                                    if (entryTitle.contains(query)) filteredEntries.add(entryInfo);
+                                }
                             }
                             adapter.submitList(filteredEntries);
                             return true;
@@ -297,128 +312,93 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
             }
         }, getViewLifecycleOwner(), Lifecycle.State.RESUMED);
 
+        // The webViewViewModel observer and BroadcastReceiver registration remains here, as it's tied to the view's lifecycle.
         webViewViewModel.getLoadingState().observe(getViewLifecycleOwner(), isLoading -> {
             Log.d(TAG, "Loading state observed in AllEntriesFragment: " + isLoading);
             if (entries != null) {
                 for (EntryInfo entry : entries) {
                     entry.setLoading(isLoading);
-                    Log.d(TAG, "Entry ID: " + entry.getEntryId() + " - isLoading set to: " + entry.isLoading());
                 }
                 adapter.notifyDataSetChanged();
-            } else {
-                Log.d(TAG, "Entries list is null in AllEntriesFragment.");
             }
         });
-
-
-    }
-
-    private void doWhenTranslationFinish(EntryInfo entryInfo, String translatedHtml, String targetLanguage) {
-        webViewViewModel.resetEntry(entryInfo.getEntryId());
-
-        // Handle html
-        Document doc = Jsoup.parse(translatedHtml);
-        doc.head().append(webViewViewModel.getStyle());
-        Objects.requireNonNull(doc.selectFirst("body"))
-                .prepend(webViewViewModel.getHtml(
-                        entryInfo.getEntryTitle(),
-                        entryInfo.getFeedTitle(),
-                        entryInfo.getEntryPublishedDate(),
-                        entryInfo.getFeedImageUrl()
-                ));
-        String finalHtml = doc.html();
-
-        webViewViewModel.updateHtml(finalHtml, entryInfo.getEntryId());
-        entryRepository.updateHtml(finalHtml, entryInfo.getEntryId());
-
-        TextUtil textUtil = new TextUtil(sharedPreferencesRepository);
-        final String translatedContent = textUtil.extractHtmlContent(finalHtml, "--####--");
-
-        webViewViewModel.updateTranslated(translatedContent, entryInfo.getEntryId());
-        webViewViewModel.updateEntryTranslatedField(entryInfo.getEntryId(), translatedContent);
-        entryRepository.updateTranslatedText(translatedContent, entryInfo.getEntryId());
-
-        sharedPreferencesRepository.setIsTranslatedView(entryInfo.getEntryId(), true);
-
-        new Handler(Looper.getMainLooper()).postDelayed(() -> {
-            Entry updatedEntry = entryRepository.getEntryById(entryInfo.getEntryId());
-            String contentToSpeak = (updatedEntry != null) ? updatedEntry.getTranslated() : null;
-
-            if (contentToSpeak != null && !contentToSpeak.trim().isEmpty()) {
-                Log.d("AllEntriesFragment", "Triggering TTS with translated content");
-
-                boolean isInWebView = sharedPreferencesRepository.getCurrentReadingEntryId() == entryInfo.getEntryId();
-                boolean isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(entryInfo.getEntryId());
-
-                if (isInWebView && isTranslatedView) {
-                    ttsPlayer.extract(entryInfo.getEntryId(), entryInfo.getFeedId(), contentToSpeak, targetLanguage);
-                } else {
-                    Log.d("AllEntriesFragment", "TTS extract skipped (not current or not translated view)");
-                }
-            } else {
-                Log.w("AllEntriesFragment", "Translated content is empty or missing");
-            }
-        }, 500);
     }
 
     private void translate(EntryInfo entryInfo) {
-        String html = webViewViewModel.getHtmlById(entryInfo.getEntryId());
-        if (html == null) return;
-        Log.d(TAG, "translating title: " + entryInfo.getEntryTitle());
-        // Identify source language
-        TextUtil textUtil = new TextUtil(sharedPreferencesRepository);
-        String content = textUtil.extractHtmlContent(html, "--####--");
-        String translationMethod = sharedPreferencesRepository.getTranslationMethod();
-        String targetLanguage = sharedPreferencesRepository.getDefaultTranslationLanguage();
+        Log.d(TAG, "Manual translation requested for entry ID: " + entryInfo.getEntryId());
 
-        Disposable disposable = textUtil.identifyLanguageRx(content).subscribe(languageCode -> {
-            Disposable translateDisposable;
-            Log.d(TAG, "translate: translation method: " + translationMethod);
-            if (translationMethod.equals("lineByLine")) {
-                translateDisposable = textUtil.translateHtmlLineByLine(languageCode, targetLanguage, html, entryInfo.getEntryTitle(), entryInfo.getEntryId(), progress -> {
-                    requireActivity().runOnUiThread(() ->
-                            Toast.makeText(requireContext(), progress + "% Translated for " + entryInfo.getEntryTitle(), Toast.LENGTH_SHORT).show()
-                    );
-                }).subscribe(translatedHtml -> {
-                    doWhenTranslationFinish(entryInfo, translatedHtml, targetLanguage);
-                });
-            } else if (translationMethod.equals("paragraphByParagraph")) {
-                translateDisposable = textUtil.translateHtmlByParagraph(languageCode, targetLanguage, html, entryInfo.getEntryTitle(), entryInfo.getEntryId(), progress -> {
-                        requireActivity().runOnUiThread(() ->
-                                Toast.makeText(requireContext(), progress + "% Translated for " + entryInfo.getEntryTitle(), Toast.LENGTH_SHORT).show()
-                        );
-            }).subscribe(translatedHtml -> {
-                    doWhenTranslationFinish(entryInfo, translatedHtml, targetLanguage);
-                }, error -> {
-                    Log.e("AllEntriesFragment", "Translation failed for paragraph mode", error);
-                });
+        String originalHtml = entryRepository.getOriginalHtmlById(entryInfo.getEntryId());
+        if (originalHtml == null || originalHtml.isEmpty()) {
+            Toast.makeText(requireContext(), "Original content not found, cannot translate.", Toast.LENGTH_SHORT).show();
+            return;
+        }
 
-            } else {
-                translateDisposable = textUtil.translateHtmlAllAtOnce(languageCode, targetLanguage, html, entryInfo.getEntryTitle(), entryInfo.getEntryId(), progress -> {
-                    requireActivity().runOnUiThread(() ->
-                            Toast.makeText(requireContext(), progress + "% Translated for " + entryInfo.getEntryTitle(), Toast.LENGTH_SHORT).show()
-                    );
-                }).subscribe(translatedHtml -> {
-                    doWhenTranslationFinish(entryInfo, translatedHtml, targetLanguage);
-                });
-            }
-            compositeDisposable.add(translateDisposable);
-        }, throwable -> {
-            System.err.println("Error identifying language: " + throwable.getMessage());
-        });
-        compositeDisposable.add(disposable);
+        String sourceLang = entryInfo.getFeedLanguage();
+        String targetLang = sharedPreferencesRepository.getDefaultTranslationLanguage();
+
+        if (sourceLang == null || sourceLang.isEmpty() || sourceLang.equalsIgnoreCase(targetLang)) {
+            Toast.makeText(requireContext(), "Article is already in the target language or source language is unknown.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        Toast.makeText(requireContext(), "Translating " + entryInfo.getEntryTitle() + "...", Toast.LENGTH_SHORT).show();
+
+        // This now works because the import and @Inject are correct.
+        Disposable translationDisposable = translationRepository.translateText(originalHtml, sourceLang, targetLang)
+                .subscribeOn(io.reactivex.rxjava3.schedulers.Schedulers.io())
+                .observeOn(io.reactivex.rxjava3.android.schedulers.AndroidSchedulers.mainThread())
+                .subscribe(
+                        (String translatedHtml) -> {
+                            Log.d(TAG, "Manual translation successful for entry ID: " + entryInfo.getEntryId());
+                            entryRepository.updateHtml(translatedHtml, entryInfo.getEntryId());
+
+                            Document doc = Jsoup.parse(translatedHtml);
+                            org.jsoup.nodes.Element titleElement = doc.selectFirst("div.entry-header > p:first-of-type");
+                            String translatedTitleText = (titleElement != null) ? titleElement.text() : "";
+
+                            org.jsoup.nodes.Element header = doc.selectFirst("div.entry-header");
+                            if (header != null) {
+                                header.remove();
+                            }
+                            String translatedBodyText = textUtil.extractHtmlContent(doc.body().html(), "--####--");
+
+                            entryRepository.updateTranslatedTitle(translatedTitleText, entryInfo.getEntryId());
+                            entryRepository.updateTranslatedSummary(translatedBodyText, entryInfo.getEntryId());
+                            entryRepository.updateTranslated(translatedTitleText + "\n\n" + translatedBodyText, entryInfo.getEntryId());
+
+                            allEntriesViewModel.getEntriesByFeed(feedId, filterBy);
+
+                            Toast.makeText(requireContext(), "Translation successful!", Toast.LENGTH_SHORT).show();
+                        },
+                        (Throwable throwable) -> {
+                            Log.e(TAG, "Manual translation failed for entry ID: " + entryInfo.getEntryId(), throwable);
+                            Toast.makeText(requireContext(), "Translation failed: " + throwable.getMessage(), Toast.LENGTH_LONG).show();
+                        }
+                );
+
+        if (compositeDisposable != null) {
+            compositeDisposable.add(translationDisposable);
+        }
     }
+
 
     @Override
     public void onDestroyView() {
         super.onDestroyView();
+        // This MUST be here to match the registration in onViewCreated
+        if (translationFinishedReceiver != null) {
+            LocalBroadcastManager.getInstance(requireContext()).unregisterReceiver(translationFinishedReceiver);
+        }
         binding = null;
     }
 
     @Override
     public void onPause() {
-        super.onPause();
-        if (swipeRefreshLayout.isRefreshing()) swipeRefreshLayout.setRefreshing(false);
+        // THIS IS PART OF THE FIX:
+        // We stop listening for the broadcast when the fragment is no longer visible.
+        LocalBroadcastManager.getInstance(requireContext()).unregisterReceiver(translationFinishedReceiver);
+
+        super.onPause();if (swipeRefreshLayout.isRefreshing()) swipeRefreshLayout.setRefreshing(false);
         if (isSelectionMode) {
             exitSelectionMode();
         }
@@ -426,7 +406,42 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
 
     @Override
     public void onEntryClick(EntryInfo entryInfo) {
-        onPlayingButtonClick(entryInfo.getEntryId());
+        // THIS IS THE FIX:
+        // This method now does the work itself, using the fresh, up-to-date
+        // entryInfo object passed directly from the adapter. It no longer calls
+        // onPlayingButtonClick.
+
+        Context context = getContext();
+        if (context == null) {
+            return;
+        }
+
+        Intent intent = new Intent(context, WebViewActivity.class);
+        intent.putExtra("entry_id", entryInfo.getEntryId());
+        intent.putExtra("read", false); // Assume a normal click is for reading/playing
+
+        // 1. Get the title that is currently being displayed on the screen.
+        String titleToPass = entryInfo.getTranslatedTitle();
+        boolean isTranslated = false;
+
+        // 2. If there's no translated title, fall back to the original.
+        if (titleToPass == null || titleToPass.trim().isEmpty()) {
+            titleToPass = entryInfo.getEntryTitle();
+            isTranslated = false;
+        } else {
+            // 3. If there IS a translated title, mark the flag as true.
+            isTranslated = true;
+        }
+
+        // 4. Put the correct data into the Intent. This will fix the logcat issue.
+        intent.putExtra("entry_title", titleToPass);
+        intent.putExtra("is_translated", isTranslated);
+
+        Log.d("DEBUG_TRANSLATION", "Sending to WebViewActivity from onEntryClick: is_translated = " + isTranslated);
+
+        // Update visited date and start the activity
+        allEntriesViewModel.updateVisitedDate(entryInfo.getEntryId());
+        startActivity(intent);
     }
 
     @Override
@@ -491,12 +506,42 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
         entries = sortedEntries;
     }
 
+
     @Override
     public void onPlayingButtonClick(long entryId) {
+        // Find the correct EntryInfo object from our up-to-date list.
+        EntryInfo entryToOpen = null;
+        for (EntryInfo info : entries) {
+            if (info.getEntryId() == entryId) {
+                entryToOpen = info;
+                break;
+            }
+        }
+
+        if (entryToOpen == null) {
+            Toast.makeText(getContext(), "Error: Could not find article data.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
         Context context = getContext();
         Intent intent = new Intent(context, WebViewActivity.class);
         intent.putExtra("read", false);
         intent.putExtra("entry_id", entryId);
+
+        // We check if a translated title exists...
+        String titleToPass = entryToOpen.getTranslatedTitle();
+        boolean isTranslated = false;
+        if (titleToPass == null || titleToPass.trim().isEmpty()) {
+            titleToPass = entryToOpen.getEntryTitle();
+        } else {
+            //... if it does, we set our flag to true.
+            isTranslated = true;
+        }
+
+        // THIS IS THE FIX: We pass both the correct title AND the correct state.
+        intent.putExtra("entry_title", titleToPass);
+        intent.putExtra("is_translated", isTranslated);
+
 
         List<Long> allLinks = new ArrayList<>();
         for (EntryInfo entryInfo : entries) {
@@ -505,7 +550,6 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
         allEntriesViewModel.insertPlaylist(allLinks, entryId);
         allEntriesViewModel.updateVisitedDate(entryId);
 
-//        Bundle b = ActivityOptions.makeSceneTransitionAnimation(getActivity()).toBundle();
         if (context != null) {
             context.startActivity(intent);
         }
@@ -513,10 +557,38 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
 
     @Override
     public void onReadingButtonClick(long entryId) {
+        // Find the correct EntryInfo object from our up-to-date list.
+        EntryInfo entryToOpen = null;
+        for (EntryInfo info : entries) {
+            if (info.getEntryId() == entryId) {
+                entryToOpen = info;
+                break;
+            }
+        }
+
+        if (entryToOpen == null) {
+            Toast.makeText(getContext(), "Error: Could not find article data.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
         Context context = getContext();
         Intent intent = new Intent(context, WebViewActivity.class);
         intent.putExtra("read", true);
         intent.putExtra("entry_id", entryId);
+
+        // We check if a translated title exists...
+        String titleToPass = entryToOpen.getTranslatedTitle();
+        boolean isTranslated = false;
+        if (titleToPass == null || titleToPass.trim().isEmpty()) {
+            titleToPass = entryToOpen.getEntryTitle();
+        } else {
+            //... if it does, we set our flag to true.
+            isTranslated = true;
+        }
+
+        // THIS IS THE FIX: We pass both the correct title AND the correct state.
+        intent.putExtra("entry_title", titleToPass);
+        intent.putExtra("is_translated", isTranslated);
 
         List<Long> allLinks = new ArrayList<>();
         for (EntryInfo entryInfo : entries) {
@@ -525,7 +597,6 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
         allEntriesViewModel.insertPlaylist(allLinks, entryId);
         allEntriesViewModel.updateVisitedDate(entryId);
 
-//        Bundle b = ActivityOptions.makeSceneTransitionAnimation(getActivity()).toBundle();
         if (context != null) {
             context.startActivity(intent);
         }
@@ -598,5 +669,30 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
         actionBar.setCustomView(null);
         requireActivity().invalidateOptionsMenu();
         adapter.exitSelectionMode();
+    }
+
+    @Override
+    public void onCreate(@Nullable Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        // THIS IS PART OF THE FIX:
+        // We create the receiver object once, when the fragment itself is created.
+        translationFinishedReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                Log.d("TranslationDebug", "Broadcast received! Refreshing entries now.");
+                if (allEntriesViewModel != null) {
+                    allEntriesViewModel.getEntriesByFeed(feedId, filterBy);
+                }
+            }
+        };
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        // THIS IS PART OF THE FIX:
+        // We start listening for the broadcast whenever the fragment becomes visible.
+        LocalBroadcastManager.getInstance(requireContext()).registerReceiver(translationFinishedReceiver, new IntentFilter("translation-finished"));
     }
 }
