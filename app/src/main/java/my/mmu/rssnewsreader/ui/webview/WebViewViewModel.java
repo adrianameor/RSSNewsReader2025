@@ -244,15 +244,13 @@ public class WebViewViewModel extends ViewModel {
             return;
         }
 
-        //_snackbarMessage.setValue("Identifying language...");
-
         disposables.add(textUtil.identifyLanguageRx(plainContentForDetection)
                 .subscribeOn(Schedulers.io())
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(
                         sourceLang -> {
                             if (sourceLang.equalsIgnoreCase(targetLang)) {
-                                _translationError.setValue("Article is already in the target language.");
+                                _snackbarMessage.setValue("Article is already in the target language.");
                                 return;
                             }
 

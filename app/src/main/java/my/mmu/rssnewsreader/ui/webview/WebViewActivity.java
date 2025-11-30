@@ -206,23 +206,43 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             }
         });
 
-        // THIS IS THE FIX: This now observes the complete TranslationResult object
+        // This observer now correctly handles updating the TTS player after a successful translation.
         webViewViewModel.getTranslationResult().observe(this, result -> {
-            if (result == null) return;
+            if (result == null || result.finalHtml == null || result.finalTitle == null) return;
 
             makeSnackbar("Translation successful!");
 
-            // Update the UI state
+            // 1. Update the core UI state
             isTranslatedView = true;
             sharedPreferencesRepository.setIsTranslatedView(currentId, true);
             toggleTranslationButton.setVisible(true);
             toggleTranslationButton.setTitle("Show Original");
 
-            // THIS IS THE FIX: Update both the toolbar title and the webview content at the same time
+            // 2. Update the toolbar title and the WebView content
             if (getSupportActionBar() != null) {
                 getSupportActionBar().setTitle(result.finalTitle);
             }
             loadHtmlIntoWebView(result.finalHtml, result.finalTitle);
+
+            // --- THIS IS THE CLEANER AND CORRECT FIX ---
+            // 3. Directly get the user's chosen target language from preferences.
+            String targetLang = sharedPreferencesRepository.getDefaultTranslationLanguage();
+
+            // 4. Update the TTS Extractor with the correct language.
+            ttsExtractor.setCurrentLanguage(targetLang, true);
+
+            // 5. Extract the plain text from the new translated HTML.
+            String plainTextContent = textUtil.extractHtmlContent(result.finalHtml, "--####--");
+
+            // 6. THIS IS THE FIX: Combine the title and the body for the TTS player.
+            String fullContentForTts = result.finalTitle + "\n\n" + plainTextContent;
+
+            // 7. Update the TTS player with the new FULL content and the correct language.
+            if (!fullContentForTts.trim().isEmpty()) {
+                Log.d(TAG, "Manual translation finished. Updating TTS player with new full content and language: " + targetLang);
+                ttsPlayer.extract(currentId, feedId, fullContentForTts, targetLang);
+            }
+            // --- END OF FIX ---
         });
 
         // This watches for any error dialogs
@@ -425,52 +445,44 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         }
         // --- End of red circle logic ---
 
-
-        // --- THIS IS THE FIX for the state memory ---
-
-        // 1. Check if a user has a saved viewing preference for this article.
-        // My previous fix for SharedPreferences was wrong. We can do this without changing that file.
-        // We check the repository for the saved boolean.
+        // --- This block for state memory is correct and remains unchanged ---
         Boolean savedViewState = sharedPreferencesRepository.getIsTranslatedView(currentId);
-
         if (savedViewState != null) {
-            // If there's a saved state (true or false), USE IT. Ignore what the intent says.
             isTranslatedView = savedViewState;
             Log.d("DEBUG_TRANSLATION", "State loaded from Saved Preference: isTranslatedView = " + isTranslatedView);
         } else {
-            // Otherwise, this is the first time. Use the state from the news page and save it for next time.
             boolean isStartingInTranslatedViewFromIntent = getIntent().getBooleanExtra("is_translated", false);
             isTranslatedView = isStartingInTranslatedViewFromIntent;
             sharedPreferencesRepository.setIsTranslatedView(currentId, isTranslatedView);
             Log.d("DEBUG_TRANSLATION", "State set from Intent: isTranslatedView = " + isTranslatedView);
         }
+        // --- End of state memory logic ---
 
-        // 2. Now decide what to show based on the reliable `isTranslatedView` state.
+        // Now decide what content and title to show based on the reliable state
         String htmlToLoad;
         String titleToDisplay;
+        String contentForTts;
+        String langForTts;
         boolean translationExists = entryInfo.getHtml() != null && !entryInfo.getHtml().equals(originalHtml);
 
         if (isTranslatedView && translationExists) {
-            // We want to see the translation and it exists.
             htmlToLoad = entryInfo.getHtml();
             titleToDisplay = entryInfo.getTranslatedTitle();
+            contentForTts = entryInfo.getTranslated();
+            langForTts = sharedPreferencesRepository.getDefaultTranslationLanguage(); // Use target language
         } else {
-            // In all other cases (e.g. we want original, or translation doesn't exist yet), show the original.
             htmlToLoad = originalHtml;
             titleToDisplay = entryInfo.getEntryTitle();
+            contentForTts = entryInfo.getContent();
+            langForTts = entryInfo.getFeedLanguage(); // Use original feed's language
         }
-        // --- End of state memory fix ---
 
-
-        // Now we can safely load the UI with the correct data
+        // Load the UI with the correct content
         loadHtmlIntoWebView(htmlToLoad, titleToDisplay);
-
         if (getSupportActionBar() != null) {
             getSupportActionBar().setTitle(titleToDisplay);
         }
-
-        boolean hasTranslatedVersionInDb = entryRepository.getHtmlById(currentId) != null && !entryRepository.getHtmlById(currentId).isEmpty();
-        toggleTranslationButton.setVisible(hasTranslatedVersionInDb);
+        toggleTranslationButton.setVisible(translationExists);
         toggleTranslationButton.setTitle(isTranslatedView ? "Show Original" : "Show Translation");
 
         if (bookmark == null || bookmark.equals("N")) {
@@ -479,12 +491,18 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             bookmarkButton.setIcon(R.drawable.ic_bookmark_filled);
         }
 
-        String contentForTts = isTranslatedView ? entryInfo.getTranslated() : entryInfo.getContent();
-        String lang = getLanguageForCurrentView(currentId, isTranslatedView, "en");
-        ttsExtractor.setCurrentLanguage(lang, true);
-        if (contentForTts != null && !contentForTts.trim().isEmpty()) {
-            ttsPlayer.extract(currentId, feedId, contentForTts, lang);
+        // --- THIS IS THE FIX for the initial TTS language ---
+        // There is no more race condition. We simply trust the language from the database.
+        if (langForTts == null || langForTts.trim().isEmpty()) {
+            langForTts = "en"; // Safe fallback to prevent crashes
+            Log.w(TAG, "Language for TTS was null or empty, defaulting to 'en'");
         }
+
+        ttsExtractor.setCurrentLanguage(langForTts, true);
+        if (contentForTts != null && !contentForTts.trim().isEmpty()) {
+            ttsPlayer.extract(currentId, feedId, contentForTts, langForTts);
+        }
+        // --- END OF FIX ---
 
         sharedPreferencesRepository.setCurrentReadingEntryId(currentId);
         syncLoadingWithTts();
@@ -646,45 +664,51 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                     return true;
                 }
 
-                EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
-                if (entryInfo == null) {
-                    makeSnackbar("Feed language info not found.");
-                    isTranslatedView = currentMode;
-                    sharedPreferencesRepository.setIsTranslatedView(currentId, currentMode);
-                    return true;
-                }
-
                 String translatedHtml = webViewViewModel.getHtmlById(currentId);
                 String originalHtmlForToggle = webViewViewModel.getOriginalHtmlById(currentId);
                 String htmlToLoad = isTranslatedView ? translatedHtml : originalHtmlForToggle;
-
-                Log.d(TAG, "TOGGLE BUTTON PRESSED");
-                Log.d(TAG, "Original HTML:\n" + originalHtmlForToggle);
-                Log.d(TAG, "Translated HTML:\n" + translatedHtml);
-                Log.d(TAG, "HTML loaded for toggle view:\n" + htmlToLoad);
 
                 if (htmlToLoad != null && !htmlToLoad.trim().isEmpty()) {
                     toggleTranslationButton.setTitle(isTranslatedView ? "Show Original" : "Show Translation");
                     loadHtmlIntoWebView(htmlToLoad);
 
+                    // --- THIS IS THE FIX for the wrong accent ---
                     if (isTranslatedView) {
+                        // When switching TO translated view...
                         String translated = entry.getTranslated();
                         if (translated != null && !translated.trim().isEmpty()) {
-                            Log.d(TAG, "ToggleTranslation: Broadcasting translatedTextReady again");
-                            webViewViewModel.setTranslatedTextReady(currentId, translated);
-                            String lang = getLanguageForCurrentView(currentId, isTranslatedView, "en");
+                            // 1. Get the target language (e.g., "en")
+                            String lang = sharedPreferencesRepository.getDefaultTranslationLanguage();
+                            // 2. Set the TTS engine's language.
+                            ttsExtractor.setCurrentLanguage(lang, true);
+                            // 3. Send the translated text to be read.
                             ttsPlayer.extract(entry.getId(), entry.getFeedId(), translated, lang);
-                        } else {
-                            Log.w(TAG, "ToggleTranslation: translated content missing, skipping extract");
                         }
                     } else {
+                        // When switching TO original view...
                         String original = entry.getContent();
-                        String lang = getLanguageForCurrentView(currentId, isTranslatedView, "en");
                         if (original != null && !original.trim().isEmpty()) {
-                            Log.d(TAG, "ToggleTranslation: Reading original content");
-                            ttsPlayer.extract(entry.getId(), entry.getFeedId(), original, lang);
+                            Disposable langDetectionDisposable = textUtil.identifyLanguageRx(original)
+                                    .subscribeOn(io.reactivex.rxjava3.schedulers.Schedulers.io())
+                                    .observeOn(io.reactivex.rxjava3.android.schedulers.AndroidSchedulers.mainThread())
+                                    .subscribe(
+                                            originalLang -> {
+                                                // 2. Now that we have the correct original language...
+                                                Log.d(TAG, "Toggle to original: Language identified as: " + originalLang);
+                                                ttsExtractor.setCurrentLanguage(originalLang, true);
+                                                // 3. Send the original text to be read with the correct accent.
+                                                ttsPlayer.extract(entry.getId(), entry.getFeedId(), original, originalLang);
+                                            },
+                                            error -> {
+                                                // Fallback on error
+                                                Log.e(TAG, "Could not re-identify original language", error);
+                                                makeSnackbar("Could not identify language.");
+                                            }
+                                    );
+                            compositeDisposable.add(langDetectionDisposable);
                         }
                     }
+
                 } else {
                     makeSnackbar("No alternate version available.");
                     isTranslatedView = currentMode;
