@@ -298,4 +298,12 @@ public class WebViewViewModel extends ViewModel {
                 )
         );
     }
+    public void cancelTranslation() {
+        // This interrupts and cancels all ongoing RxJava jobs added to this CompositeDisposable.
+        disposables.clear();
+        // Set the translating state back to false to hide the progress bar.
+        _isTranslating.postValue(false);
+        // Post a message to the UI to confirm cancellation.
+        _snackbarMessage.postValue("Translation cancelled.");
+    }
 }

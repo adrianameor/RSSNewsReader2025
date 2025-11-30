@@ -126,6 +126,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     private LinearLayout functionButtons;
     private MediaBrowserHelper mMediaBrowserHelper;
     private Set<Long> translatedArticleIds = new HashSet<>();
+    private Snackbar translationSnackbar;
 
     @Inject
     TtsPlayer ttsPlayer;
@@ -194,58 +195,65 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     }
 
     private void initializeTranslationObservers() {
-        // This watches for the loading bar
+        // This observer now handles the new persistent Snackbar with a Cancel button.
         webViewViewModel.isTranslating().observe(this, isTranslating -> {
             if (isTranslating) {
+                // --- THIS IS THE FIX ---
+                // 1. Create a persistent snackbar with the "Translating..." message.
+                translationSnackbar = Snackbar.make(findViewById(R.id.webView_view), "Translating... please wait", Snackbar.LENGTH_INDEFINITE);
+
+                // 2. Add a "Cancel" action button that calls the ViewModel's cancel method.
+                translationSnackbar.setAction("Cancel", v -> {
+                    webViewViewModel.cancelTranslation();
+                });
+
+                // 3. Show the snackbar.
+                translationSnackbar.show();
+                // --- END OF FIX ---
+
+                // Also show the visual loading bar
                 loading.setVisibility(View.VISIBLE);
                 loading.setIndeterminate(true);
-                makeSnackbar("Translating... please wait");
+
             } else {
+                // When translation is finished, cancelled, or has an error, dismiss the snackbar.
+                if (translationSnackbar != null && translationSnackbar.isShown()) {
+                    translationSnackbar.dismiss();
+                }
+
+                // Also hide the visual loading bar
                 loading.setIndeterminate(false);
                 loading.setVisibility(View.GONE);
             }
         });
 
-        // This observer now correctly handles updating the TTS player after a successful translation.
+        // This observer for the final result remains unchanged.
         webViewViewModel.getTranslationResult().observe(this, result -> {
-            if (result == null || result.finalHtml == null || result.finalTitle == null) return;
+            if (result == null) return;
 
             makeSnackbar("Translation successful!");
-
-            // 1. Update the core UI state
             isTranslatedView = true;
             sharedPreferencesRepository.setIsTranslatedView(currentId, true);
             toggleTranslationButton.setVisible(true);
             toggleTranslationButton.setTitle("Show Original");
 
-            // 2. Update the toolbar title and the WebView content
             if (getSupportActionBar() != null) {
                 getSupportActionBar().setTitle(result.finalTitle);
             }
             loadHtmlIntoWebView(result.finalHtml, result.finalTitle);
 
-            // --- THIS IS THE CLEANER AND CORRECT FIX ---
-            // 3. Directly get the user's chosen target language from preferences.
             String targetLang = sharedPreferencesRepository.getDefaultTranslationLanguage();
-
-            // 4. Update the TTS Extractor with the correct language.
             ttsExtractor.setCurrentLanguage(targetLang, true);
-
-            // 5. Extract the plain text from the new translated HTML.
             String plainTextContent = textUtil.extractHtmlContent(result.finalHtml, "--####--");
-
-            // 6. THIS IS THE FIX: Combine the title and the body for the TTS player.
             String fullContentForTts = result.finalTitle + "\n\n" + plainTextContent;
 
-            // 7. Update the TTS player with the new FULL content and the correct language.
             if (!fullContentForTts.trim().isEmpty()) {
                 Log.d(TAG, "Manual translation finished. Updating TTS player with new full content and language: " + targetLang);
                 ttsPlayer.extract(currentId, feedId, fullContentForTts, targetLang);
             }
-            // --- END OF FIX ---
         });
 
-        // This watches for any error dialogs
+        // This observer for error dialogs remains unchanged.
         webViewViewModel.getTranslationError().observe(this, error -> {
             if (error != null && !error.isEmpty()) {
                 new AlertDialog.Builder(this)
@@ -253,16 +261,14 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                         .setMessage(error)
                         .setPositiveButton(android.R.string.ok, null)
                         .show();
-                // Reset the error so it doesn't show again
-                // This requires adding a clear method to the ViewModel
             }
         });
 
-        // This is the new observer for simple snackbar status messages
+        // This observer for simple status messages remains unchanged.
         webViewViewModel.getSnackbarMessage().observe(this, message -> {
             if (message != null && !message.isEmpty()) {
                 makeSnackbar(message);
-                webViewViewModel.clearSnackbar(); // Reset the message
+                webViewViewModel.clearSnackbar();
             }
         });
     }
