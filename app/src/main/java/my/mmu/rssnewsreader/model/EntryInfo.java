@@ -40,6 +40,7 @@ public class EntryInfo {
     public String translatedTitle;
     public String translatedSummary;
     public String targetTranslationLanguage;
+    public String translated;
 
     @Ignore
     public EntryInfo(String entryTitle, String entryLink, String entryDescription, String entryImageUrl, String entryCategory, Date entryPublishedDate, Date visitedDate, String bookmark, long feedId, float ttsSpeechRate, String feedLanguage, String feedTitle, String feedImageUrl) {
@@ -276,4 +277,12 @@ public class EntryInfo {
     public String getTargetTranslationLanguage() {
         return targetTranslationLanguage;
     }
+    public String getTranslated() {
+        return translated;
+    }
+
+    public void setTranslated(String translated) {
+        this.translated = translated;
+    }
+
 }

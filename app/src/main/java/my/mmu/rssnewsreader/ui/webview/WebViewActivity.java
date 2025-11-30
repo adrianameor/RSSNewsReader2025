@@ -491,98 +491,77 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
     private void loadEntryContent() {
         long entryId = getIntent().getLongExtra("entry_id", -1);
-        if (entryId == -1) {
-            makeSnackbar("Error: No article ID provided.");
-            finish();
-            return;
-        }
+        if (entryId == -1) { makeSnackbar("Error: No article ID provided."); finish(); return; }
         currentId = entryId;
 
         EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
-        if (entryInfo == null) {
-            makeSnackbar("Error: Could not load article data.");
-            finish();
-            return;
-        }
+        if (entryInfo == null) { makeSnackbar("Error: Could not load article data."); finish(); return; }
 
         currentLink = entryInfo.getEntryLink();
         feedId = entryInfo.getFeedId();
         bookmark = entryInfo.getBookmark();
 
-        // --- THIS IS THE FIX ---
-        // First, check if there is any offline content at all.
+        // --- This block for RED CIRCLE articles is correct and remains unchanged ---
         String originalHtml = entryRepository.getOriginalHtmlById(currentId);
         if (originalHtml == null || originalHtml.trim().isEmpty()) {
-            // This is a "RED CIRCLE" article. No offline content exists.
             Log.d(TAG, "No offline content found for entry " + currentId + ". Loading URL directly.");
-
-            // Directly load the article's live URL into the WebView.
             if (currentLink != null && !currentLink.isEmpty()) {
                 webView.loadUrl(currentLink);
             } else {
-                // If there's no link, we can't do anything. Show an error.
                 makeSnackbar("Error: No URL found for this article.");
                 finish();
                 return;
             }
-
-            // Set up the UI for "browser mode"
             if (getSupportActionBar() != null) {
                 getSupportActionBar().setTitle(entryInfo.getEntryTitle());
             }
-            browserButton.setVisible(false); // We are already in the browser
-            offlineButton.setVisible(false);  // Show the button to return to an (empty) offline view
-            toggleTranslationButton.setVisible(false); // No offline content to translate
+            browserButton.setVisible(false);
+            offlineButton.setVisible(false);
+            toggleTranslationButton.setVisible(false);
             reloadButton.setVisible(true);
             highlightTextButton.setVisible(false);
-
-            // Stop further processing in this method to prevent the crash.
             return;
         }
-        // --- END OF FIX ---
+        // --- End of red circle logic ---
 
 
-        // If we reach here, it means offline content EXISTS (yellow or green circle).
-        // The rest of the original method can now run safely.
-        Log.d("DEBUG_TRANSLATION", "--- Starting loadEntryContent for offline article ---");
+        // --- THIS IS THE FIX for the state memory ---
 
-        String titleFromIntent = getIntent().getStringExtra("entry_title");
-        boolean isStartingInTranslatedView = getIntent().getBooleanExtra("is_translated", false);
-        Log.d("DEBUG_TRANSLATION", "Received from Intent: is_translated = " + isStartingInTranslatedView);
+        // 1. Check if a user has a saved viewing preference for this article.
+        // My previous fix for SharedPreferences was wrong. We can do this without changing that file.
+        // We check the repository for the saved boolean.
+        Boolean savedViewState = sharedPreferencesRepository.getIsTranslatedView(currentId);
 
-        String titleToDisplay = (titleFromIntent != null && !titleFromIntent.isEmpty()) ? titleFromIntent : entryInfo.getEntryTitle();
-
-        isTranslatedView = isStartingInTranslatedView;
-        sharedPreferencesRepository.setIsTranslatedView(currentId, isTranslatedView);
-        Log.d("DEBUG_TRANSLATION", "State set: isTranslatedView = " + isTranslatedView);
-
-        String htmlToLoad;
-        String contentForTts;
-
-        if (isTranslatedView) {
-            Log.d("DEBUG_TRANSLATION", "Branch: Trying to load TRANSLATED content.");
-            htmlToLoad = entryRepository.getHtmlById(currentId);
-            Log.d("DEBUG_TRANSLATION", "Result from getHtmlById (translated): " + (htmlToLoad == null ? "null" : "found " + htmlToLoad.length() + " chars"));
-
-            if (htmlToLoad == null || htmlToLoad.trim().isEmpty()) {
-                Log.w("DEBUG_TRANSLATION", "Translated HTML was not ready. Falling back to ORIGINAL content for this load.");
-                htmlToLoad = originalHtml; // We already fetched this
-                Log.d("DEBUG_TRANSLATION", "Result from getOriginalHtmlById (fallback): " + (htmlToLoad == null ? "null" : "found " + htmlToLoad.length() + " chars"));
-            }
-            contentForTts = entryRepository.getEntryById(currentId) != null ? entryRepository.getEntryById(currentId).getTranslated() : null;
+        if (savedViewState != null) {
+            // If there's a saved state (true or false), USE IT. Ignore what the intent says.
+            isTranslatedView = savedViewState;
+            Log.d("DEBUG_TRANSLATION", "State loaded from Saved Preference: isTranslatedView = " + isTranslatedView);
         } else {
-            Log.d("DEBUG_TRANSLATION", "Branch: Loading ORIGINAL content.");
-            htmlToLoad = originalHtml; // Use the one we already fetched
-            Log.d("DEBUG_TRANSLATION", "Result from getOriginalHtmlById: " + (htmlToLoad == null ? "null" : "found " + htmlToLoad.length() + " chars"));
-            contentForTts = entryRepository.getEntryById(currentId) != null ? entryRepository.getEntryById(currentId).getContent() : null;
+            // Otherwise, this is the first time. Use the state from the news page and save it for next time.
+            boolean isStartingInTranslatedViewFromIntent = getIntent().getBooleanExtra("is_translated", false);
+            isTranslatedView = isStartingInTranslatedViewFromIntent;
+            sharedPreferencesRepository.setIsTranslatedView(currentId, isTranslatedView);
+            Log.d("DEBUG_TRANSLATION", "State set from Intent: isTranslatedView = " + isTranslatedView);
         }
 
-        if (htmlToLoad == null || htmlToLoad.trim().isEmpty()) {
-            Log.e("DEBUG_TRANSLATION", "CRITICAL: htmlToLoad is STILL null or empty after all checks. Loading error page.");
-            htmlToLoad = "<html><body><h2>Content could not be loaded.</h2></body></html>";
-        }
+        // 2. Now decide what to show based on the reliable `isTranslatedView` state.
+        String htmlToLoad;
+        String titleToDisplay;
+        boolean translationExists = entryInfo.getHtml() != null && !entryInfo.getHtml().equals(originalHtml);
 
-        Log.d("DEBUG_TRANSLATION", "Final decision: Loading HTML into WebView (" + htmlToLoad.length() + " chars).");
+        if (isTranslatedView && translationExists) {
+            // We want to see the translation and it exists.
+            htmlToLoad = entryInfo.getHtml();
+            titleToDisplay = entryInfo.getTranslatedTitle();
+        } else {
+            // In all other cases (e.g. we want original, or translation doesn't exist yet), show the original.
+            htmlToLoad = originalHtml;
+            titleToDisplay = entryInfo.getEntryTitle();
+        }
+        // --- End of state memory fix ---
+
+
+        // Now we can safely load the UI with the correct data
         loadHtmlIntoWebView(htmlToLoad, titleToDisplay);
 
         if (getSupportActionBar() != null) {
@@ -599,6 +578,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             bookmarkButton.setIcon(R.drawable.ic_bookmark_filled);
         }
 
+        String contentForTts = isTranslatedView ? entryInfo.getTranslated() : entryInfo.getContent();
         String lang = getLanguageForCurrentView(currentId, isTranslatedView, "en");
         ttsExtractor.setCurrentLanguage(lang, true);
         if (contentForTts != null && !contentForTts.trim().isEmpty()) {
@@ -700,52 +680,59 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         switch (itemId) {
 
             case R.id.translate:
-                // --- THIS IS THE FIX ---
-                // 1. First, check if a valid translation already exists in the database.
-                String existingTranslatedHtml = entryRepository.getHtmlById(currentId);
-                String originalHtml = entryRepository.getOriginalHtmlById(currentId);
-                boolean hasBeenTranslated = existingTranslatedHtml != null && !existingTranslatedHtml.equals(originalHtml);
+                // --- THIS IS THE FINAL, ROBUST FIX ---
+                // It now correctly identifies the language from the current content before doing anything.
 
-                if (hasBeenTranslated) {
-                    // If it's already translated, just show a message and do nothing else.
-                    makeSnackbar("Article has already been translated.");
-
-                    // Ensure the UI is in the correct state just in case.
-                    if (!isTranslatedView) {
-                        isTranslatedView = true;
-                        sharedPreferencesRepository.setIsTranslatedView(currentId, true);
-                        toggleTranslationButton.setTitle("Show Original");
-                        loadHtmlIntoWebView(existingTranslatedHtml);
-                    }
-                    return true; // Stop here, do not re-translate.
+                // 1. Give immediate feedback and get the original HTML to work with.
+                makeSnackbar("Identifying language...");
+                final String originalHtml = entryRepository.getOriginalHtmlById(currentId);
+                if (originalHtml == null || originalHtml.trim().isEmpty()) {
+                    makeSnackbar("Original article content not available.");
+                    return true;
                 }
 
-                // 2. If we reach here, it means no translation exists. Proceed with the original logic to start a new one.
-                if (targetLanguage == null || targetLanguage.isEmpty()) {
+                // Extract plain text for more accurate language detection.
+                String plainContentForDetection = textUtil.extractHtmlContent(originalHtml, "--####--");
+                if (plainContentForDetection == null || plainContentForDetection.trim().isEmpty()) {
+                    makeSnackbar("Could not extract content to identify language.");
+                    return true;
+                }
+
+                final String targetLang = sharedPreferencesRepository.getDefaultTranslationLanguage();
+                if (targetLang == null || targetLang.isEmpty()) {
                     showTranslationLanguageDialog(this);
                     return true;
                 }
 
-                // Get the original, untranslated HTML to send to the new translator
-                String originalHtmlToTranslate = webViewViewModel.getOriginalHtmlById(currentId);
-                if (originalHtmlToTranslate == null || originalHtmlToTranslate.isEmpty()) {
-                    originalHtmlToTranslate = webViewViewModel.getHtmlById(currentId);
-                }
+                // 2. Asynchronously identify the language of the source content.
+                Disposable langDetectionDisposable = textUtil.identifyLanguageRx(plainContentForDetection)
+                        .subscribeOn(io.reactivex.rxjava3.schedulers.Schedulers.io())
+                        .observeOn(io.reactivex.rxjava3.android.schedulers.AndroidSchedulers.mainThread())
+                        .subscribe(
+                                sourceLang -> {
+                                    // This block runs on the UI thread after detection is successful.
+                                    Log.d(TAG, "Manual Translate: Language identified as: " + sourceLang);
 
-                if (originalHtmlToTranslate == null || originalHtmlToTranslate.isEmpty()) {
-                    makeSnackbar("Article content is not available for translation.");
-                    return true;
-                }
+                                    // 3. Now that we have the REAL source language, check if translation is needed.
+                                    if (sourceLang.equalsIgnoreCase(targetLang)) {
+                                        makeSnackbar("Article is already in the target language.");
+                                        return; // Stop here.
+                                    }
 
-                EntryInfo entryInfoForLanguage = webViewViewModel.getEntryInfoById(currentId);
-                if (entryInfoForLanguage == null) {
-                    makeSnackbar("Could not determine source language.");
-                    return true;
-                }
-                String sourceLanguage = entryInfoForLanguage.getFeedLanguage();
+                                    // 4. If we reach here, a translation is necessary.
+                                    // Call the ViewModel's translate method. This will correctly trigger
+                                    // the observers that show the progress bar and the final success message.
+                                    Log.d(TAG, "Manual Translate: Starting translation from " + sourceLang + " to " + targetLang);
+                                    webViewViewModel.translateArticle(originalHtml, sourceLang, targetLang);
+                                },
+                                error -> {
+                                    // This block runs if language detection fails.
+                                    Log.e(TAG, "Manual Translate: Language identification failed.", error);
+                                    makeSnackbar("Could not identify source language.");
+                                }
+                        );
 
-                // Call the translate method in the ViewModel to start the process
-                webViewViewModel.translateArticle(originalHtmlToTranslate, sourceLanguage, targetLanguage);
+                compositeDisposable.add(langDetectionDisposable);
                 return true;
 
             case R.id.zoomIn:
@@ -774,8 +761,8 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
             case R.id.exitBrowser:
                 sharedPreferencesRepository.setWebViewMode(currentId, false);
-                EntryInfo entryInfo = webViewViewModel.getLastVisitedEntry();
-                String rebuiltHtml = rebuildHtml(entryInfo);
+                EntryInfo entryInfoForExit = webViewViewModel.getLastVisitedEntry();
+                String rebuiltHtml = rebuildHtml(entryInfoForExit);
                 loadEntryContent();
                 offlineButton.setVisible(false);
                 browserButton.setVisible(true);
@@ -806,7 +793,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                     return true;
                 }
 
-                entryInfo = webViewViewModel.getEntryInfoById(currentId);
+                EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
                 if (entryInfo == null) {
                     makeSnackbar("Feed language info not found.");
                     isTranslatedView = currentMode;

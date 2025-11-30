@@ -235,7 +235,7 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
                 if (content != null && !content.isEmpty()) {
                     statusView.setBackgroundResource(R.drawable.status_dot_green);
                     statusView.setVisibility(View.VISIBLE);
-                } else if (priority > 0) {
+                } else if (hasOriginalHtml && priority > 0) {
                     statusView.setBackgroundResource(R.drawable.status_dot_yellow);
                     statusView.setVisibility(View.VISIBLE);
                 } else {
