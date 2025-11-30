@@ -7,7 +7,7 @@ android {
     compileSdk 34
 
     defaultConfig {
-        applicationId "my.mmu.rssnewsreader"
+        applicationId "com.adriana.newscompanion"
         minSdk 26
         targetSdk 33
         versionCode 1
@@ -36,7 +36,7 @@ android {
     buildFeatures {
         viewBinding true
     }
-    namespace 'my.mmu.rssnewsreader'
+    namespace 'com.adriana.newscompanion'
     lint {
         abortOnError false
     }
