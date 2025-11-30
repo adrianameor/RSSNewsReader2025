@@ -20,101 +20,67 @@ import my.mmu.rssnewsreader.data.entry.EntryRepository;
 // Adriana start
 import my.mmu.rssnewsreader.data.repository.TranslationRepository;
 // ad end
+import my.mmu.rssnewsreader.data.sharedpreferences.SharedPreferencesRepository;
 import my.mmu.rssnewsreader.model.EntryInfo;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import io.reactivex.rxjava3.core.Single;
+import my.mmu.rssnewsreader.service.util.TextUtil;
+
+import org.jsoup.Jsoup;
 
 @HiltViewModel
 public class WebViewViewModel extends ViewModel {
-
-    // Adriana start
     private final EntryRepository entryRepository;
-    // inject the repository
-    // we will add the Translation repository to the WebViewViewModel's constructor
-    // Hilt will automatically provide the instance we created
     private final TranslationRepository translationRepository;
+    private final SharedPreferencesRepository sharedPreferencesRepository;
+    private final TextUtil textUtil;
     private final CompositeDisposable disposables = new CompositeDisposable();
-    // Adriana end
-
     private final MutableLiveData<String> originalHtmlLiveData = new MutableLiveData<>();
     private final MutableLiveData<String> translatedHtmlLiveData = new MutableLiveData<>();
     private final MutableLiveData<String> translatedTextReady = new MutableLiveData<>();
     private final MutableLiveData<Boolean> loadingState = new MutableLiveData<>();
     private final MutableLiveData<Long> entryIdTrigger = new MutableLiveData<>();
-
-    // Adriana: Start of New Code for Translation ---
-    // We will add new MutableLiveData objects to the ViewModel to represent
-    // the state of the translation process
-
-    // Notepad for the Brain: Is the translator busy?
-    // _isTranslating: a boolean to indicate when a translation is in progress (for showing a loading indicator)
     private final MutableLiveData<Boolean> _isTranslating = new MutableLiveData<>(false);
     public LiveData<Boolean> isTranslating() {
         return _isTranslating;
     }
-
-    // Notepad for the Brain: What is the finished translation?
-    // _translatedArticleContent: will hold the successfully translated text
     private final MutableLiveData<String> _translatedArticleContent = new MutableLiveData<>();
     public LiveData<String> getTranslatedArticleContent() {
         return _translatedArticleContent;
     }
-
-    // Notepad for the Brain: Did something go wrong?
-    // _translationError: will hold the any error messages if the translation fails
     private final MutableLiveData<String> _translationError = new MutableLiveData<>();
     public LiveData<String> getTranslationError() {
         return _translationError;
     }
-
-    // ---Adriana: End of New Code for Translation ---
     public LiveData<Boolean> getLoadingState() {
         return loadingState;
     }
-
     public void setLoadingState(boolean isLoading) {
         loadingState.postValue(isLoading);
     }
 
-    /* This is the old constructor. We comment it out for reference.
-    @Inject
-    public WebViewViewModel(EntryRepository entryRepository) {
-        this.entryRepository = entryRepository;
+    private final MutableLiveData<String> _snackbarMessage = new MutableLiveData<>();
+    public LiveData<String> getSnackbarMessage() { return _snackbarMessage; }
+
+    private final MutableLiveData<TranslationResult> _translationResult = new MutableLiveData<>();    public LiveData<TranslationResult> getTranslationResult() { return _translationResult; }
+
+    public static class TranslationResult {
+        public final String finalHtml;
+        public final String finalTitle;
+        public TranslationResult(String finalHtml, String finalTitle) {
+            this.finalHtml = finalHtml;
+            this.finalTitle = finalTitle;
+        }
     }
-    */
-    // Adriana Start
-    // This is the new constructor. We give the Brain the new translator tool.
+
     @Inject
-    public WebViewViewModel(EntryRepository entryRepository, TranslationRepository translationRepository) {
+    public WebViewViewModel(EntryRepository entryRepository, TranslationRepository translationRepository, SharedPreferencesRepository sharedPreferencesRepository, TextUtil textUtil) {
         this.entryRepository = entryRepository;
         this.translationRepository = translationRepository;
-    }
-
-    // New Instruction for the Brain: "Translate this text!"
-    public void translateArticle(String text, String sourceLang, String targetLang) {
-        // 1. Write "Yes" on the "Is Translating?" notepad.
-        _isTranslating.setValue(true);
-
-        // 2. Give the work to the translator to do in a separate room.
-        disposables.add(
-                // Use the correct method name 'translateText'
-                translationRepository.translateText(text, sourceLang, targetLang)
-                        .subscribeOn(Schedulers.io()) // The separate room (a background thread)
-                        .observeOn(AndroidSchedulers.mainThread()) // Bring the result to the main desk (the UI thread)
-                        .subscribe(
-                                (String translatedText) -> { // Explicitly type the lambda parameter
-                                    // 3. On Success: Write the result on the notepad.
-                                    _isTranslating.setValue(false); // Update status to "No"
-                                    _translatedArticleContent.setValue(translatedText);
-                                },
-                                (Throwable error) -> { // Explicitly type the lambda parameter
-                                    // 4. On Failure: Write the error on the notepad.
-                                    _isTranslating.setValue(false); // Update status to "No"
-                                    _translationError.setValue(error.getMessage());
-                                }
-                        )
-        );
+        this.sharedPreferencesRepository = sharedPreferencesRepository;
+        this.textUtil = textUtil;
     }
 
     // Clean up the subscriptions when the ViewModel is no longer needed to prevent memory leaks.
@@ -123,7 +89,6 @@ public class WebViewViewModel extends ViewModel {
         super.onCleared();
         disposables.clear();
     }
-    // Adriana end
 
     public void resetEntry(long id) {
         entryRepository.updateHtml(null, id);
@@ -169,9 +134,7 @@ public class WebViewViewModel extends ViewModel {
         return "<style>\n" +
                 "    @font-face {\n" +
                 "        font-family: open_sans;\n" +
-                // adriana start
                 "        src: url(\\\"file:///android_res/font/open_sans.ttf\\\")\n" +
-                // adriana end
                 "    }\n" +
                 "    body {\n" +
                 "        font-family: open_sans;\n" +
@@ -209,15 +172,12 @@ public class WebViewViewModel extends ViewModel {
     public LiveData<String> getOriginalHtmlLiveData() {
         return originalHtmlLiveData;
     }
-
     public LiveData<String> getTranslatedHtmlLiveData() {
         return translatedHtmlLiveData;
     }
-
     public String getOriginalHtmlById(long id) {
         return entryRepository.getOriginalHtmlById(id);
     }
-
     public void triggerEntryRefresh(long entryId) {
         entryIdTrigger.postValue(entryId);
     }
@@ -260,5 +220,84 @@ public class WebViewViewModel extends ViewModel {
         if (text != null && !text.trim().isEmpty()) {
             translatedTextReady.postValue(text);
         }
+    }
+    // Helper method to post a snackbar message from the ViewModel
+    public void clearSnackbar() {
+        _snackbarMessage.setValue(null);
+    }// THIS IS THE FINAL, ROBUST FIX THAT PERFORMS LANGUAGE DETECTION FIRST
+    public void translateArticle(long entryId) {
+        final String originalHtml = entryRepository.getOriginalHtmlById(entryId);
+        if (originalHtml == null || originalHtml.trim().isEmpty()) {
+            _translationError.setValue("Original article content not available.");
+            return;
+        }
+
+        String plainContentForDetection = textUtil.extractHtmlContent(originalHtml, "--####--");
+        if (plainContentForDetection == null || plainContentForDetection.trim().isEmpty()) {
+            _translationError.setValue("Could not extract content to identify language.");
+            return;
+        }
+
+        final String targetLang = sharedPreferencesRepository.getDefaultTranslationLanguage();
+        if (targetLang == null || targetLang.isEmpty()) {
+            _translationError.setValue("Please select a target translation language first.");
+            return;
+        }
+
+        //_snackbarMessage.setValue("Identifying language...");
+
+        disposables.add(textUtil.identifyLanguageRx(plainContentForDetection)
+                .subscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(
+                        sourceLang -> {
+                            if (sourceLang.equalsIgnoreCase(targetLang)) {
+                                _translationError.setValue("Article is already in the target language.");
+                                return;
+                            }
+
+                            _isTranslating.setValue(true);
+
+                            EntryInfo entryInfo = entryRepository.getEntryInfoById(entryId);
+                            if (entryInfo == null || entryInfo.getEntryTitle() == null) {
+                                _translationError.setValue("Cannot translate, article data is missing.");
+                                _isTranslating.setValue(false);
+                                return;
+                            }
+                            final String originalTitle = entryInfo.getEntryTitle();
+
+                            // THIS IS THE FIX: Use TextUtil for both jobs
+                            Single<String> titleJob = textUtil.translateText(sourceLang, targetLang, originalTitle);
+                            Single<String> bodyJob = textUtil.translateHtml(sourceLang, targetLang, originalHtml, progress -> {});
+
+                            disposables.add(Single.zip(
+                                            titleJob,
+                                            bodyJob,
+                                            (translatedTitle, translatedBodyHtml) -> {
+                                                // Background work
+                                                entryRepository.updateTranslatedTitle(translatedTitle, entryId);
+                                                entryRepository.updateHtml(translatedBodyHtml, entryId);
+                                                String translatedBodyText = textUtil.extractHtmlContent(translatedBodyHtml, "--####--");
+                                                entryRepository.updateTranslatedSummary(translatedBodyText, entryId);
+                                                entryRepository.updateTranslated(translatedTitle + "\n\n" + translatedBodyText, entryId);
+                                                return new TranslationResult(translatedBodyHtml, translatedTitle);
+                                            })
+                                    .subscribeOn(Schedulers.io())
+                                    .observeOn(AndroidSchedulers.mainThread())
+                                    .subscribe(
+                                            result -> {
+                                                _isTranslating.setValue(false);
+                                                _translationResult.setValue(result);
+                                            },
+                                            error -> {
+                                                _isTranslating.setValue(false);
+                                                _translationError.setValue("Translation failed: " + error.getMessage());
+                                            }
+                                    )
+                            );
+                        },
+                        error -> _translationError.setValue("Could not identify source language.")
+                )
+        );
     }
 }

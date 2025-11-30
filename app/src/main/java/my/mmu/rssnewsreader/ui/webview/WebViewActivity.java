@@ -193,115 +193,12 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         builder.show();
     }
 
-    /*private void doWhenTranslationFinish(EntryInfo entryInfo, String originalHtml, String translatedHtml) {
-        loading.setVisibility(View.INVISIBLE);
-
-        if (webViewViewModel.getOriginalHtmlById(currentId) == null && originalHtml != null) {
-            webViewViewModel.updateOriginalHtml(originalHtml, currentId);
-            entryRepository.updateOriginalHtml(originalHtml, currentId);
-            Log.d(TAG, "Original HTML backed up from method parameter.");
-        }
-
-        Document doc = Jsoup.parse(translatedHtml);
-        doc.head().append(webViewViewModel.getStyle());
-        Objects.requireNonNull(doc.selectFirst("body"))
-                .prepend(webViewViewModel.getHtml(
-                        entryInfo.getEntryTitle(),
-                        entryInfo.getFeedTitle(),
-                        entryInfo.getEntryPublishedDate(),
-                        entryInfo.getFeedImageUrl()
-                ));
-        String finalHtml = doc.html();
-
-        webViewViewModel.updateHtml(finalHtml, currentId);
-        entryRepository.updateHtml(finalHtml, currentId);
-
-        String translatedContent = textUtil.extractHtmlContent(finalHtml, "--####--");
-        webViewViewModel.updateTranslated(translatedContent, currentId);
-        webViewViewModel.updateEntryTranslatedField(currentId, translatedContent);
-        entryRepository.updateTranslatedText(translatedContent, currentId);
-
-        webView.loadDataWithBaseURL("file///android_res/", finalHtml, "text/html", "UTF-8", null);
-
-        toggleTranslationButton.setVisible(true);
-        isTranslatedView = true;
-        sharedPreferencesRepository.setIsTranslatedView(currentId, true);
-
-        webViewViewModel.setTranslatedTextReady(currentId, translatedContent);
-
-        Log.d(TAG, "FINAL translatedContent passed to TTS: " + translatedContent);
-        Log.d(TAG, "FINAL currentId: " + currentId + ", isTranslatedView: " + isTranslatedView);
-    }*/
-
-    /*private void translate() {
-        Log.d(TAG, "translate: html\n" + webViewViewModel.getHtmlById(currentId));
-        makeSnackbar("Translation in progress");
-        loading.setVisibility(View.VISIBLE);
-        loading.setProgress(0);
-
-        String content = webViewViewModel.getHtmlById(currentId);
-        EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
-        if (entryInfo == null) {
-            makeSnackbar("Entry info could not be loaded.");
-            return;
-        }
-
-        if (webViewViewModel.getOriginalHtmlById(currentId) == null) {
-            webViewViewModel.updateOriginalHtml(content, currentId);
-            Log.d(TAG, "Original HTML backed up before translation.");
-        }
-
-        String feedLanguage = entryInfo.getFeedLanguage();
-        String userConfiguredLang = sharedPreferencesRepository.getDefaultTranslationLanguage();
-
-        textUtil.identifyLanguageRx(content).subscribe(
-                identifiedLanguage -> {
-                    String sourceLanguage = (userConfiguredLang != null && !userConfiguredLang.isEmpty())
-                            ? feedLanguage : identifiedLanguage;
-
-                    Log.d(TAG, "Translating from " + sourceLanguage + " to " + targetLanguage);
-                    performTranslation(sourceLanguage, targetLanguage, content, entryInfo.getEntryTitle());
-                },
-                error -> {
-                    Log.e(TAG, "Language identification failed, falling back to feedLanguage");
-                    performTranslation(feedLanguage, targetLanguage, content, entryInfo.getEntryTitle());
-                }
-        );
-    }*/
-
-    /*private void performTranslation(String sourceLang, String targetLang, String html, String title) {
-        Single<String> translationFlow;
-        switch (translationMethod) {
-            case "lineByLine":
-                translationFlow = textUtil.translateHtmlLineByLine(sourceLang, targetLang, html, title, currentId, this::updateLoadingProgress);
-                break;
-            case "paragraphByParagraph":
-                translationFlow = textUtil.translateHtmlByParagraph(sourceLang, targetLang, html, title, currentId, this::updateLoadingProgress);
-                break;
-            default:
-                translationFlow = textUtil.translateHtmlAllAtOnce(sourceLang, targetLang, html, title, currentId, this::updateLoadingProgress);
-        }
-
-        final String originalHtml = html;
-
-        translationFlow.subscribe(
-                translatedHtml -> {
-                    Log.d(TAG, "Translation completed");
-                    doWhenTranslationFinish(webViewViewModel.getLastVisitedEntry(), originalHtml, translatedHtml);
-                },
-                throwable -> {
-                    Log.e(TAG, "Translation failed", throwable);
-                    loading.setVisibility(View.GONE);
-                }
-        );
-    }*/
-
     private void initializeTranslationObservers() {
-        // This watches the "Is Translating?" notepad from the ViewModel
+        // This watches for the loading bar
         webViewViewModel.isTranslating().observe(this, isTranslating -> {
             if (isTranslating) {
                 loading.setVisibility(View.VISIBLE);
-                loading.setIndeterminate(true); // Shows a continuous loading animation
+                loading.setIndeterminate(true);
                 makeSnackbar("Translating... please wait");
             } else {
                 loading.setIndeterminate(false);
@@ -309,32 +206,26 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             }
         });
 
-        // This watches the "Finished Translation" notepad
-        webViewViewModel.getTranslatedArticleContent().observe(this, translatedHtml -> {
-            if (translatedHtml == null || translatedHtml.isEmpty()) {
-                makeSnackbar("Translation returned empty content.");
-                return;
-            }
+        // THIS IS THE FIX: This now observes the complete TranslationResult object
+        webViewViewModel.getTranslationResult().observe(this, result -> {
+            if (result == null) return;
 
-            // Save the new translated HTML to the database
-            webViewViewModel.updateHtml(translatedHtml, currentId);
-
-            // Also save the plain text version for the TTS player
-            String translatedContent = textUtil.extractHtmlContent(translatedHtml, "--####--");
-            webViewViewModel.updateTranslated(translatedContent, currentId);
-
-            // Load the new HTML into the WebView
-            loadHtmlIntoWebView(translatedHtml);
+            makeSnackbar("Translation successful!");
 
             // Update the UI state
             isTranslatedView = true;
             sharedPreferencesRepository.setIsTranslatedView(currentId, true);
             toggleTranslationButton.setVisible(true);
             toggleTranslationButton.setTitle("Show Original");
-            makeSnackbar("Translation successful!");
+
+            // THIS IS THE FIX: Update both the toolbar title and the webview content at the same time
+            if (getSupportActionBar() != null) {
+                getSupportActionBar().setTitle(result.finalTitle);
+            }
+            loadHtmlIntoWebView(result.finalHtml, result.finalTitle);
         });
 
-        // This watches the "Did something go wrong?" notepad
+        // This watches for any error dialogs
         webViewViewModel.getTranslationError().observe(this, error -> {
             if (error != null && !error.isEmpty()) {
                 new AlertDialog.Builder(this)
@@ -342,6 +233,16 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                         .setMessage(error)
                         .setPositiveButton(android.R.string.ok, null)
                         .show();
+                // Reset the error so it doesn't show again
+                // This requires adding a clear method to the ViewModel
+            }
+        });
+
+        // This is the new observer for simple snackbar status messages
+        webViewViewModel.getSnackbarMessage().observe(this, message -> {
+            if (message != null && !message.isEmpty()) {
+                makeSnackbar(message);
+                webViewViewModel.clearSnackbar(); // Reset the message
             }
         });
     }
@@ -680,59 +581,11 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         switch (itemId) {
 
             case R.id.translate:
-                // --- THIS IS THE FINAL, ROBUST FIX ---
-                // It now correctly identifies the language from the current content before doing anything.
-
-                // 1. Give immediate feedback and get the original HTML to work with.
-                makeSnackbar("Identifying language...");
-                final String originalHtml = entryRepository.getOriginalHtmlById(currentId);
-                if (originalHtml == null || originalHtml.trim().isEmpty()) {
-                    makeSnackbar("Original article content not available.");
-                    return true;
-                }
-
-                // Extract plain text for more accurate language detection.
-                String plainContentForDetection = textUtil.extractHtmlContent(originalHtml, "--####--");
-                if (plainContentForDetection == null || plainContentForDetection.trim().isEmpty()) {
-                    makeSnackbar("Could not extract content to identify language.");
-                    return true;
-                }
-
-                final String targetLang = sharedPreferencesRepository.getDefaultTranslationLanguage();
-                if (targetLang == null || targetLang.isEmpty()) {
-                    showTranslationLanguageDialog(this);
-                    return true;
-                }
-
-                // 2. Asynchronously identify the language of the source content.
-                Disposable langDetectionDisposable = textUtil.identifyLanguageRx(plainContentForDetection)
-                        .subscribeOn(io.reactivex.rxjava3.schedulers.Schedulers.io())
-                        .observeOn(io.reactivex.rxjava3.android.schedulers.AndroidSchedulers.mainThread())
-                        .subscribe(
-                                sourceLang -> {
-                                    // This block runs on the UI thread after detection is successful.
-                                    Log.d(TAG, "Manual Translate: Language identified as: " + sourceLang);
-
-                                    // 3. Now that we have the REAL source language, check if translation is needed.
-                                    if (sourceLang.equalsIgnoreCase(targetLang)) {
-                                        makeSnackbar("Article is already in the target language.");
-                                        return; // Stop here.
-                                    }
-
-                                    // 4. If we reach here, a translation is necessary.
-                                    // Call the ViewModel's translate method. This will correctly trigger
-                                    // the observers that show the progress bar and the final success message.
-                                    Log.d(TAG, "Manual Translate: Starting translation from " + sourceLang + " to " + targetLang);
-                                    webViewViewModel.translateArticle(originalHtml, sourceLang, targetLang);
-                                },
-                                error -> {
-                                    // This block runs if language detection fails.
-                                    Log.e(TAG, "Manual Translate: Language identification failed.", error);
-                                    makeSnackbar("Could not identify source language.");
-                                }
-                        );
-
-                compositeDisposable.add(langDetectionDisposable);
+                // --- THIS IS THE FIX ---
+                // The Activity no longer does the translation. It just tells the ViewModel to start.
+                // The ViewModel will handle the progress bar and results via LiveData,
+                // which the Activity is already observing in initializeTranslationObservers().
+                webViewViewModel.translateArticle(currentId);
                 return true;
 
             case R.id.zoomIn:
