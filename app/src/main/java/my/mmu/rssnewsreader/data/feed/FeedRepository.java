@@ -36,6 +36,7 @@ import my.mmu.rssnewsreader.service.util.TextUtil;
 import io.reactivex.rxjava3.disposables.CompositeDisposable;
 import android.os.Handler;
 import android.os.Looper;
+import org.jsoup.Jsoup;
 
 public class FeedRepository {
 
@@ -156,79 +157,62 @@ public class FeedRepository {
     }
 
     public void addNewFeed(RssFeed feed) {
-        // --- THIS IS THE NEW, SMARTER LOGIC ---
+        // --- THIS IS THE NEW, SMARTER LOGIC BASED ON YOUR EXCELLENT SUGGESTION ---
 
-        // 1. Get the language code provided by the RSS feed's data (and clean it).
-        String feedLanguage = feed.getLanguage();
-        if (feedLanguage != null && feedLanguage.contains("-")) {
-            feedLanguage = feedLanguage.substring(0, feedLanguage.indexOf("-")).toLowerCase();
-        }
-        final String finalFeedLanguage = feedLanguage; // Make it final for use in lambda
-
-        // 2. Always get a sample of text to run automatic detection.
+        // 1. Get a CLEANER sample of text by using titles and paragraph text.
         StringBuilder sampleText = new StringBuilder();
-        for (int i = 0; i < Math.min(5, feed.getRssItems().size()); i++) {
+        for (int i = 0; i < Math.min(5, feed.getRssItems().size()); i++) { // Look at first 5 items
             RssItem item = feed.getRssItems().get(i);
+
+            // Add the title, which is usually clean text.
+            if (item.getTitle() != null) {
+                sampleText.append(item.getTitle()).append(". ");
+            }
+
+            // Parse the description HTML and get text only from paragraphs.
             if (item.getDescription() != null) {
-                sampleText.append(item.getDescription()).append(" ");
+                String pText = Jsoup.parse(item.getDescription()).select("p").text();
+                if (pText != null && !pText.isEmpty()) {
+                    sampleText.append(pText).append(" ");
+                }
             }
         }
 
-        // If there's no text, we can't do anything smart. Save with what the feed gave us or a default.
+        // If there's no clean text to analyze, we fall back to a safe default.
         if (sampleText.toString().trim().isEmpty()) {
-            Log.w(TAG, "No sample text for language ID. Saving with feed-provided language or 'en'.");
-            saveFeedAndEntries(feed, (finalFeedLanguage != null && !finalFeedLanguage.isEmpty() ? finalFeedLanguage : "en"));
+            Log.w(TAG, "No clean sample text found for language ID. Saving with default 'en'.");
+            saveFeedAndEntries(feed, "en");
             return;
         }
 
-        // 3. Run the automatic detection.
+        // 2. Run the automatic detection on the much cleaner sample text.
         Disposable languageDetectionDisposable = textUtil.identifyLanguageRx(sampleText.toString())
                 .subscribeOn(Schedulers.io())
                 .observeOn(Schedulers.io())
                 .subscribe(
                         identifiedLanguage -> {
-                            // 4. THIS IS THE SMARTER LOGIC: Compare the results.
-                            String finalLanguageToSave;
-
-                            boolean isFeedLangUseful = finalFeedLanguage != null && !finalFeedLanguage.trim().isEmpty() && !finalFeedLanguage.equalsIgnoreCase("und");
-                            boolean isDetectedLangUseful = identifiedLanguage != null && !identifiedLanguage.trim().isEmpty() && !identifiedLanguage.equalsIgnoreCase("und");
-
-                            // Heuristic: If the feed claims to be English, but our detection finds something
-                            // else specific, we will trust our detection. This handles your exact problem.
-                            if (isFeedLangUseful && finalFeedLanguage.equals("en") && isDetectedLangUseful && !identifiedLanguage.equals("en")) {
-                                Log.d(TAG, "Conflict detected. Feed says 'en', but content is detected as '" + identifiedLanguage + "'. TRUSTING DETECTION.");
-                                finalLanguageToSave = identifiedLanguage;
+                            // 3. After detection, check if the result is valid and useful.
+                            if (identifiedLanguage != null && !identifiedLanguage.equalsIgnoreCase("und") && !identifiedLanguage.trim().isEmpty()) {
+                                // If it is, use the detected language.
+                                Log.d(TAG, "Proactively identified language for feed '" + feed.getLink() + "' as: " + identifiedLanguage);
+                                saveFeedAndEntries(feed, identifiedLanguage);
+                            } else {
+                                // If the result is "und" or null, it's a failure. Fall back to the safe default.
+                                Log.w(TAG, "Language detection resulted in '" + identifiedLanguage + "'. Defaulting to 'en' for feed: " + feed.getLink());
+                                saveFeedAndEntries(feed, "en");
                             }
-                            // Heuristic: If the feed provides a useful language that isn't English, trust it
-                            // (as it's likely more specific than our detection, e.g., ms-my vs id).
-                            else if (isFeedLangUseful && !finalFeedLanguage.equals("en")) {
-                                Log.d(TAG, "Detected language is '" + identifiedLanguage + "'. Trusting the specific language provided by the feed: '" + finalFeedLanguage + "'");
-                                finalLanguageToSave = finalFeedLanguage;
-                            }
-                            // Heuristic: If the feed language is not useful, but detection is, use detection.
-                            else if (isDetectedLangUseful) {
-                                Log.d(TAG, "Feed language not provided or not useful. Using detected language: '" + identifiedLanguage + "'");
-                                finalLanguageToSave = identifiedLanguage;
-                            }
-                            // Ultimate fallback in case nothing is useful.
-                            else {
-                                Log.w(TAG, "Could not determine language from feed or detection. Defaulting to 'en'.");
-                                finalLanguageToSave = "en";
-                            }
-
-                            // 5. Save with the final, decided language.
-                            saveFeedAndEntries(feed, finalLanguageToSave);
                         },
                         error -> {
-                            // On error, fall back to trusting the feed's language or 'en'.
-                            Log.e(TAG, "Proactive language ID failed. Falling back to feed-provided language.", error);
-                            saveFeedAndEntries(feed, (finalFeedLanguage != null && !finalFeedLanguage.isEmpty() ? finalFeedLanguage : "en"));
+                            // 4. On any other error, also fall back to a safe default.
+                            Log.e(TAG, "Proactive language ID failed for feed " + feed.getLink() + ". Defaulting to 'en'.", error);
+                            saveFeedAndEntries(feed, "en");
                         }
                 );
 
         disposables.add(languageDetectionDisposable);
     }
 
+    // This is the helper method, now with corrected threading logic.
     private void saveFeedAndEntries(RssFeed feed, String languageCode) {
         // This part correctly runs on a background thread.
         String imageUrl = "https://www.google.com/s2/favicons?sz=64&domain_url=" + feed.getLink();
@@ -253,7 +237,7 @@ public class FeedRepository {
         markFeedAsPreloaded(feedId);
         entryRepository.requeueMissingEntries();
 
-        // --- THIS IS THE FIX for the threading issue ---
+        // --- THIS IS THE FIX for the threading issue that was preventing content downloads ---
         // After all background DB work is done, we post the commands to start
         // the next workers back onto the main Android thread.
 
