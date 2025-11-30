@@ -196,7 +196,11 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
             // FIX: Use the correct variable name 'entryItemClickInterface'
             view.setOnClickListener(v -> {
                 if (entryItemClickInterface != null) {
-                    entryItemClickInterface.onEntryClick(entryInfo);
+                    boolean isTranslated = !TextUtils.isEmpty(entryInfo.getHtml())
+                            && (entryInfo.getOriginalHtml() == null || !entryInfo.getHtml().equals(entryInfo.getOriginalHtml()))
+                            && !TextUtils.isEmpty(entryInfo.getTranslatedTitle());
+
+                    entryItemClickInterface.onEntryClick(entryInfo, isTranslated);
                 }
             });
 
@@ -245,7 +249,7 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
     }
 
     public interface EntryItemClickInterface {
-        void onEntryClick(EntryInfo entryInfo);
+        void onEntryClick(EntryInfo entryInfo, boolean isTranslated);
         void onMoreButtonClick(long entryId, String link, boolean unread);
         void onBookmarkButtonClick(String bool, long id);
         void onSelectionModeChanged(boolean isSelectionMode);

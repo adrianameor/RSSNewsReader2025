@@ -399,11 +399,9 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
     }
 
     @Override
-    public void onEntryClick(EntryInfo entryInfo) {
+    public void onEntryClick(EntryInfo entryInfo, boolean isTranslated) {
         // THIS IS THE FIX:
-        // This method now does the work itself, using the fresh, up-to-date
-        // entryInfo object passed directly from the adapter. It no longer calls
-        // onPlayingButtonClick.
+        // This method now accepts the 'isTranslated' boolean directly from the adapter.
 
         Context context = getContext();
         if (context == null) {
@@ -414,20 +412,20 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
         intent.putExtra("entry_id", entryInfo.getEntryId());
         intent.putExtra("read", false); // Assume a normal click is for reading/playing
 
-        // 1. Get the title that is currently being displayed on the screen.
-        String titleToPass = entryInfo.getTranslatedTitle();
-        boolean isTranslated = false;
-
-        // 2. If there's no translated title, fall back to the original.
-        if (titleToPass == null || titleToPass.trim().isEmpty()) {
-            titleToPass = entryInfo.getEntryTitle();
-            isTranslated = false;
+        // 1. Get the correct title that corresponds to the translation state.
+        String titleToPass;
+        if (isTranslated) {
+            titleToPass = entryInfo.getTranslatedTitle();
         } else {
-            // 3. If there IS a translated title, mark the flag as true.
-            isTranslated = true;
+            titleToPass = entryInfo.getEntryTitle();
         }
 
-        // 4. Put the correct data into the Intent. This will fix the logcat issue.
+        // As a safety fallback, if the title is still empty, use the original title.
+        if (titleToPass == null || titleToPass.trim().isEmpty()) {
+            titleToPass = entryInfo.getEntryTitle();
+        }
+
+        // 2. Pass the correct title AND the correct translation state to the next activity.
         intent.putExtra("entry_title", titleToPass);
         intent.putExtra("is_translated", isTranslated);
 
