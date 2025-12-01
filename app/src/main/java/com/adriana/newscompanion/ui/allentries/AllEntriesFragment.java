@@ -358,7 +358,7 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
 
                             entryRepository.updateTranslatedTitle(translatedTitleText, entryInfo.getEntryId());
                             entryRepository.updateTranslatedSummary(translatedBodyText, entryInfo.getEntryId());
-                            entryRepository.updateTranslated(translatedTitleText + "\n\n" + translatedBodyText, entryInfo.getEntryId());
+                            entryRepository.updateTranslated(translatedTitleText + "--####--" + translatedBodyText, entryInfo.getEntryId());
 
                             allEntriesViewModel.getEntriesByFeed(feedId, filterBy);
 

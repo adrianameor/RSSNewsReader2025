@@ -86,7 +86,7 @@ public class AutoTranslator {
                                                     org.jsoup.nodes.Document doc = org.jsoup.Jsoup.parse(translatedBodyHtml);
                                                     String translatedBodyText = textUtil.extractHtmlContent(doc.body().html(), delimiter);
                                                     entryRepository.updateTranslatedSummary(translatedBodyText, id);
-                                                    entryRepository.updateTranslated(translatedTitle + "\n\n" + translatedBodyText, id);
+                                                    entryRepository.updateTranslated(translatedTitle + "--####--" + translatedBodyText, id);
                                                     return true;
                                                 })
                                         .subscribe(success -> {

@@ -275,7 +275,7 @@ public class WebViewViewModel extends ViewModel {
                                                 entryRepository.updateHtml(translatedBodyHtml, entryId);
                                                 String translatedBodyText = textUtil.extractHtmlContent(translatedBodyHtml, "--####--");
                                                 entryRepository.updateTranslatedSummary(translatedBodyText, entryId);
-                                                entryRepository.updateTranslated(translatedTitle + "\n\n" + translatedBodyText, entryId);
+                                                entryRepository.updateTranslated(translatedTitle + "--####--" + translatedBodyText, entryId);
                                                 return new TranslationResult(translatedBodyHtml, translatedTitle);
                                             })
                                     .subscribeOn(Schedulers.io())
