@@ -188,7 +188,7 @@ public class TtsExtractor {
                                 org.jsoup.nodes.Document doc = org.jsoup.Jsoup.parse(translatedBodyHtml);
                                 String translatedBodyText = textUtil.extractHtmlContent(doc.body().html(), delimiter);
                                 entryRepository.updateTranslatedSummary(translatedBodyText, currentIdInProgress);
-                                entryRepository.updateTranslated(translatedTitle + "\n\n" + translatedBodyText, currentIdInProgress);
+                                entryRepository.updateTranslated(translatedTitle + delimiter + translatedBodyText, currentIdInProgress);
 
                                 return true; // Return a value to satisfy the BiFunction
                             })
@@ -289,20 +289,23 @@ public class TtsExtractor {
                                             Readability4JExtended readability4J = new Readability4JExtended(currentLink, html);
                                             Article article = readability4J.parse();
 
+                                            // --- THIS IS THE FIX ---
+                                            // We no longer add the delimiter here. We only add the title.
                                             if (currentTitle != null && !currentTitle.isEmpty()) {
-                                                content.append(currentTitle).append(delimiter);
+                                                content.append(currentTitle);
                                             }
 
                                             if (article.getContentWithUtf8Encoding() != null) {
                                                 Document doc = Jsoup.parse(article.getContentWithUtf8Encoding());
+                                                // ... (all your existing doc.select()... code is correct and remains unchanged)
                                                 doc.select("img").removeAttr("width");
                                                 doc.select("img").removeAttr("height");
                                                 doc.select("img").removeAttr("sizes");
                                                 doc.select("img").removeAttr("srcset");
                                                 doc.select("h1").remove();
-                                                doc.select("img").attr("style", "border-radius: 5px; width: 100%; margin-left:0"); // find all images and set width to 100%
-                                                doc.select("figure").attr("style", "width: 100%; margin-left:0"); // find all images and set width to 100%
-                                                doc.select("iframe").attr("style", "width: 100%; margin-left:0"); // find all images and set width to 100%
+                                                doc.select("img").attr("style", "border-radius: 5px; width: 100%; margin-left:0");
+                                                doc.select("figure").attr("style", "width: 100%; margin-left:0");
+                                                doc.select("iframe").attr("style", "width: 100%; margin-left:0");
 
                                                 List<String> tags = Arrays.asList("h2", "h3", "h4", "h5", "h6", "p", "td", "pre", "th", "li", "figcaption", "blockquote", "section");
                                                 for (Element element : doc.getAllElements()) {
@@ -316,17 +319,20 @@ public class TtsExtractor {
                                                         if (!sameContent) {
                                                             String text = element.text().trim();
                                                             if (!text.isEmpty() && text.length() > 1) {
-                                                                if (currentTitle != null && !currentTitle.isEmpty()) {
-                                                                    content.append(delimiter).append(text);
-                                                                } else {
-                                                                    content.append(text);
+                                                                // NEW, CORRECTED LOGIC:
+                                                                // Always add a delimiter *before* adding a new piece of content.
+                                                                // This ensures it's only ever between pieces of text.
+                                                                if (content.length() > 0) {
+                                                                    content.append(delimiter);
                                                                 }
+                                                                content.append(text);
                                                             } else {
                                                                 element.remove();
                                                             }
                                                         }
                                                     }
                                                 }
+                                                // --- END OF FIX ---
 
                                                 entryRepository.updateHtml(doc.html(), currentIdInProgress);
 
@@ -383,30 +389,29 @@ public class TtsExtractor {
                                 } catch (Exception e) {
                                     Log.e(TAG, "[onReceiveValue] Exception during extraction", e);
                                     failedIds.add(currentIdInProgress);
-                                    Log.d(TAG, e.getMessage());
+                                    Log.d(TAG, e.getMessage() != null ? e.getMessage() : "Unknown exception");
                                     e.printStackTrace();
                                 } finally {
                                     Log.d(TAG, "[onReceiveValue] Finally block: resetting flags for ID = " + currentIdInProgress);
+
+                                    if (stopExtracting || content.toString().isEmpty()) {
+                                        Log.w(TAG, "Extraction failed for ID: " + currentIdInProgress);
+                                        if (!failedIds.contains(currentIdInProgress)) {
+                                            failedIds.add(currentIdInProgress);
+                                        }
+                                    }
+
+                                    if (webViewCallback != null) {
+                                        Log.d(TAG, "Extraction complete. Notifying UI via finishedSetup()");
+                                        webViewCallback.finishedSetup();
+                                        webViewCallback = null;
+                                    }
+
                                     currentIdInProgress = -1;
                                     extractionInProgress = false;
-                                    extractAllEntries();
+                                    // Call extractAllEntries() without delay from the main thread to ensure proper continuation
+                                    new Handler(Looper.getMainLooper()).post(TtsExtractor.this::extractAllEntries);
                                 }
-
-                                if (stopExtracting || content.toString().isEmpty()) {
-                                    Log.w(TAG, "Extraction failed for ID: " + currentIdInProgress);
-                                    failedIds.add(currentIdInProgress);
-                                }
-
-                                if (webViewCallback != null) {
-                                    Log.d(TAG, "Extraction complete. Notifying UI via finishedSetup()");
-                                    webViewCallback.finishedSetup();
-                                    webViewCallback = null;
-                                }
-
-                                Log.d(TAG, "[onReceiveValue] Extraction completed for ID: " + currentIdInProgress);
-                                currentIdInProgress = -1;
-                                extractionInProgress = false;
-                                extractAllEntries();
                             }
                         });
                     }

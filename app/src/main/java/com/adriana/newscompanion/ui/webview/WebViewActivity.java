@@ -240,7 +240,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             String targetLang = sharedPreferencesRepository.getDefaultTranslationLanguage();
             ttsExtractor.setCurrentLanguage(targetLang, true);
             String plainTextContent = textUtil.extractHtmlContent(result.finalHtml, "--####--");
-            String fullContentForTts = result.finalTitle + "\n\n" + plainTextContent;
+            String fullContentForTts = result.finalTitle + "--####--" + plainTextContent;
 
             if (!fullContentForTts.trim().isEmpty()) {
                 Log.d(TAG, "Manual translation finished. Updating TTS player with new full content and language: " + targetLang);
@@ -423,8 +423,9 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         feedId = entryInfo.getFeedId();
         bookmark = entryInfo.getBookmark();
 
-        // --- This block for RED CIRCLE articles is correct and remains unchanged ---
         String originalHtml = entryRepository.getOriginalHtmlById(currentId);
+
+        // This handles the RED CIRCLE case.
         if (originalHtml == null || originalHtml.trim().isEmpty()) {
             Log.d(TAG, "No offline content found for entry " + currentId + ". Loading URL directly.");
             if (currentLink != null && !currentLink.isEmpty()) {
@@ -434,9 +435,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 finish();
                 return;
             }
-            if (getSupportActionBar() != null) {
-                getSupportActionBar().setTitle(entryInfo.getEntryTitle());
-            }
+            if (getSupportActionBar() != null) getSupportActionBar().setTitle(entryInfo.getEntryTitle());
             browserButton.setVisible(false);
             offlineButton.setVisible(false);
             toggleTranslationButton.setVisible(false);
@@ -444,42 +443,40 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             highlightTextButton.setVisible(false);
             return;
         }
-        // --- End of red circle logic ---
 
-        // --- This block for state memory is correct and remains unchanged ---
         Boolean savedViewState = sharedPreferencesRepository.getIsTranslatedView(currentId);
         if (savedViewState != null) {
             isTranslatedView = savedViewState;
-            Log.d("DEBUG_TRANSLATION", "State loaded from Saved Preference: isTranslatedView = " + isTranslatedView);
         } else {
             boolean isStartingInTranslatedViewFromIntent = getIntent().getBooleanExtra("is_translated", false);
             isTranslatedView = isStartingInTranslatedViewFromIntent;
             sharedPreferencesRepository.setIsTranslatedView(currentId, isTranslatedView);
-            Log.d("DEBUG_TRANSLATION", "State set from Intent: isTranslatedView = " + isTranslatedView);
         }
-        // --- End of state memory logic ---
 
-        // Now decide what content and title to show based on the reliable state
         String htmlToLoad;
         String titleToDisplay;
         String contentForTts;
         String langForTts;
         boolean translationExists = entryInfo.getHtml() != null && !entryInfo.getHtml().equals(originalHtml);
 
+        // --- THIS IS THE FIX ---
+        // We go back to the simpler logic. We trust that the 'content' and 'translated'
+        // fields from the database are already correctly formatted by the extractor.
         if (isTranslatedView && translationExists) {
             htmlToLoad = entryInfo.getHtml();
             titleToDisplay = entryInfo.getTranslatedTitle();
-            contentForTts = entryInfo.getTranslated();
-            langForTts = sharedPreferencesRepository.getDefaultTranslationLanguage(); // Use target language
+            contentForTts = entryInfo.getTranslated(); // This field should contain "Title--####--Body"
+            langForTts = sharedPreferencesRepository.getDefaultTranslationLanguage();
         } else {
             htmlToLoad = originalHtml;
             titleToDisplay = entryInfo.getEntryTitle();
-            contentForTts = entryInfo.getContent();
-            langForTts = entryInfo.getFeedLanguage(); // Use original feed's language
+            contentForTts = entryInfo.getContent(); // This field should contain "Title--####--Body"
+            langForTts = entryInfo.getFeedLanguage();
         }
+        // --- END OF FIX ---
 
-        // Load the UI with the correct content
         loadHtmlIntoWebView(htmlToLoad, titleToDisplay);
+
         if (getSupportActionBar() != null) {
             getSupportActionBar().setTitle(titleToDisplay);
         }
@@ -492,18 +489,12 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             bookmarkButton.setIcon(R.drawable.ic_bookmark_filled);
         }
 
-        // --- THIS IS THE FIX for the initial TTS language ---
-        // There is no more race condition. We simply trust the language from the database.
         if (langForTts == null || langForTts.trim().isEmpty()) {
-            langForTts = "en"; // Safe fallback to prevent crashes
-            Log.w(TAG, "Language for TTS was null or empty, defaulting to 'en'");
+            langForTts = "en"; // Safe fallback
         }
-
-        ttsExtractor.setCurrentLanguage(langForTts, true);
         if (contentForTts != null && !contentForTts.trim().isEmpty()) {
             ttsPlayer.extract(currentId, feedId, contentForTts, langForTts);
         }
-        // --- END OF FIX ---
 
         sharedPreferencesRepository.setCurrentReadingEntryId(currentId);
         syncLoadingWithTts();
@@ -1059,12 +1050,27 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     public void highlightText(String searchText) {
         if (!isReadingMode && sharedPreferencesRepository.getHighlightText()) {
             String text = searchText.trim();
+            // 1. Log the raw text received from the TTS player
+            Log.d("HIGHLIGHT_DEBUG", "Raw searchText from TTS: \'" + searchText + "\'");
+
+            // 2. Normalize whitespace (multiple spaces/newlines to single space) as you suggested
+            text = text.replaceAll("\\s+", " ");
+
             if (webViewViewModel.endsWithBreak(text)) {
                 text = text.substring(0, text.length() - 1);
             }
-            Log.d(TAG, "Highlighted text: " + text);
-            String finalText = text.trim();
-            ContextCompat.getMainExecutor(getApplicationContext()).execute(() -> webView.findAllAsync(finalText));
+
+            // 4. Log the final, cleaned text that we will ask the WebView to find
+            Log.d("HIGHLIGHT_DEBUG", "Normalized text to search: \'" + text + "\'");
+            final String finalText = text.trim();
+
+            if (!finalText.isEmpty()) {
+                ContextCompat.getMainExecutor(getApplicationContext()).execute(() -> {
+                    Log.d("HIGHLIGHT_DEBUG", "Executing WebView.findAllAsync for: \'" + finalText + "\'");
+                    webView.findAllAsync(finalText);
+                });
+            }
+            // --- END OF YOUR DEBUGGING CODE ---
         }
     }
 
