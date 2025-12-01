@@ -44,6 +44,7 @@ import javax.inject.Singleton;
 
 import dagger.hilt.android.qualifiers.ApplicationContext;
 import io.reactivex.rxjava3.disposables.CompositeDisposable;
+import io.reactivex.rxjava3.disposables.Disposable;
 
 @Singleton
 public class TtsExtractor {
@@ -156,10 +157,6 @@ public class TtsExtractor {
     }
 
     private void translateHtml(String html, String content, final long currentIdInProgress, String currentTitle) {
-        // THIS IS THE FINAL, UNIFIED FIX
-        // This method will now translate both the title and the body at the same time,
-        // solving all the race conditions and delays.
-
         String sourceLanguage = textUtil.identifyLanguageRx(content).blockingGet();
         String targetLanguage = sharedPreferencesRepository.getDefaultTranslationLanguage();
         setCurrentLanguage(targetLanguage, false);
@@ -169,7 +166,7 @@ public class TtsExtractor {
 
             // 1. Create two separate background jobs: one for the title, one for the body.
             Single<String> titleTranslationJob = textUtil.translateText(sourceLanguage, targetLanguage, currentTitle);
-            Single<String> bodyTranslationJob = textUtil.translateHtml(sourceLanguage, targetLanguage, html, progress -> {});
+            Single<String> bodyTranslationJob = translateBodyRobustly(html, sourceLanguage, targetLanguage, currentIdInProgress);
 
             // 2. Use Single.zip to run both jobs and wait until BOTH are complete.
             disposables.add(Single.zip(
@@ -213,6 +210,64 @@ public class TtsExtractor {
                     )
             );
         }
+    }
+
+    // This is the corrected helper method that performs the robust "chunking" translation.
+    private Single<String> translateBodyRobustly(String originalHtml, String sourceLang, String targetLang, long entryId) {
+        return Single.create(emitter -> {
+            try {
+                Document doc = Jsoup.parse(originalHtml);
+                List<Element> elementsToTranslate = new ArrayList<>();
+                // Select all major text-containing block elements.
+                for (Element element : doc.select("p, h2, h3, h4, h5, h6, li, blockquote, figcaption, td, th")) {
+                    if (!element.text().trim().isEmpty()) {
+                        elementsToTranslate.add(element);
+                    }
+                }
+
+                if (elementsToTranslate.isEmpty()) {
+                    // If there are no structured elements, try to translate the whole body as a last resort.
+                    Log.w(TAG, "No structured text elements found for chunking on entry ID " + entryId + ". Attempting whole body translation.");
+                    // THIS IS THE FIX: Use the correct 'textUtil' field from the class.
+                    Disposable fallbackDisposable = textUtil.translateHtml(doc.body().html(), sourceLang, targetLang, progress -> {})
+                            .subscribe(emitter::onSuccess, emitter::onError);
+                    disposables.add(fallbackDisposable); // Manage the disposable
+                    return;
+                }
+
+                // Create a list of translation jobs, one for each small chunk.
+                List<Single<String>> translationSingles = new ArrayList<>();
+                for (Element element : elementsToTranslate) {
+                    translationSingles.add(
+                            // THIS IS THE FIX: Use the correct 'textUtil' field from the class.
+                            textUtil.translateHtml(element.html(), sourceLang, targetLang, progress -> {})
+                                    .subscribeOn(Schedulers.io()) // Allow each small job to run in parallel.
+                    );
+                }
+
+                // Zip all the small jobs together.
+                // THIS IS THE FIX: Capture the disposable to fix the warning.
+                Disposable zipDisposable = Single.zip(translationSingles, translatedChunks -> {
+                            // This runs after all chunks have been successfully translated.
+                            for (int i = 0; i < translatedChunks.length; i++) {
+                                // Replace the original content of each element with its translated version.
+                                elementsToTranslate.get(i).html((String) translatedChunks[i]);
+                            }
+                            // Return the fully re-assembled HTML of the article body.
+                            return doc.body().html();
+                        })
+                        .subscribe(
+                                emitter::onSuccess, // Pass the final, re-assembled HTML to the outer Single.
+                                emitter::onError    // Or, if any chunk fails, pass the error.
+                        );
+
+                // Add the disposable to our manager.
+                disposables.add(zipDisposable);
+
+            } catch (Exception e) {
+                emitter.onError(e); // Catch any initial Jsoup parsing errors.
+            }
+        });
     }
 
     public void setCallback(TtsPlayerListener callback) {
