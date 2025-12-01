@@ -7,26 +7,28 @@ import androidx.lifecycle.MutableLiveData;
 import androidx.lifecycle.Transformations;
 import androidx.lifecycle.ViewModel;
 
-// Adriana start 2
 import javax.inject.Inject;
-
 import dagger.hilt.android.lifecycle.HiltViewModel;
 import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
 import io.reactivex.rxjava3.disposables.CompositeDisposable;
+import io.reactivex.rxjava3.disposables.Disposable;
 import io.reactivex.rxjava3.schedulers.Schedulers;
-// ad end
 import com.adriana.newscompanion.data.entry.Entry;
 import com.adriana.newscompanion.data.entry.EntryRepository;
-// Adriana start
 import com.adriana.newscompanion.data.repository.TranslationRepository;
-// ad end
 import com.adriana.newscompanion.data.sharedpreferences.SharedPreferencesRepository;
 import com.adriana.newscompanion.model.EntryInfo;
 
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
+
 import io.reactivex.rxjava3.core.Single;
 import com.adriana.newscompanion.service.util.TextUtil;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
 
 @HiltViewModel
 public class WebViewViewModel extends ViewModel {
@@ -222,7 +224,8 @@ public class WebViewViewModel extends ViewModel {
     // Helper method to post a snackbar message from the ViewModel
     public void clearSnackbar() {
         _snackbarMessage.setValue(null);
-    }// THIS IS THE FINAL, ROBUST FIX THAT PERFORMS LANGUAGE DETECTION FIRST
+    }
+    // This is the new, correct implementation that translates HTML chunks to preserve formatting.
     public void translateArticle(long entryId) {
         final String originalHtml = entryRepository.getOriginalHtmlById(entryId);
         if (originalHtml == null || originalHtml.trim().isEmpty()) {
@@ -230,6 +233,7 @@ public class WebViewViewModel extends ViewModel {
             return;
         }
 
+        // We still need a plain text sample for language detection.
         String plainContentForDetection = textUtil.extractHtmlContent(originalHtml, "--####--");
         if (plainContentForDetection == null || plainContentForDetection.trim().isEmpty()) {
             _translationError.setValue("Could not extract content to identify language.");
@@ -262,9 +266,12 @@ public class WebViewViewModel extends ViewModel {
                             }
                             final String originalTitle = entryInfo.getEntryTitle();
 
-                            // THIS IS THE FIX: Use TextUtil for both jobs
                             Single<String> titleJob = textUtil.translateText(sourceLang, targetLang, originalTitle);
-                            Single<String> bodyJob = textUtil.translateHtml(sourceLang, targetLang, originalHtml, progress -> {});
+
+                            // --- THIS IS THE FIX ---
+                            // We now call a robust method that translates HTML chunks, not plain text.
+                            Single<String> bodyJob = translateHtmlBodyRobustly(originalHtml, sourceLang, targetLang, entryId);
+                            // --- END OF FIX ---
 
                             disposables.add(Single.zip(
                                             titleJob,
@@ -295,6 +302,60 @@ public class WebViewViewModel extends ViewModel {
                         error -> _translationError.setValue("Could not identify source language.")
                 )
         );
+    }
+
+    // This is the corrected helper method with the proper method signatures.
+    private Single<String> translateHtmlBodyRobustly(String originalHtml, String sourceLang, String targetLang, long entryId) {
+        return Single.create(emitter -> {            final CompositeDisposable innerDisposables = new CompositeDisposable();
+            emitter.setDisposable(innerDisposables);
+
+            try {
+                Document doc = Jsoup.parse(originalHtml);
+                List<Element> elementsToTranslate = new ArrayList<>();
+                // Select all major block elements that contain text.
+                for (Element element : doc.select("p, h2, h3, h4, h5, h6, li, blockquote, figcaption, td, th")) {
+                    if (!element.text().trim().isEmpty()) {
+                        elementsToTranslate.add(element);
+                    }
+                }
+
+                if (elementsToTranslate.isEmpty()) {
+                    // Fallback for articles with no standard block tags.
+                    // THIS IS THE FIX: Use the correct parameter order.
+                    Disposable fallbackDisposable = textUtil.translateHtml(sourceLang, targetLang, doc.body().html(), progress -> {})
+                            .onErrorReturnItem(originalHtml)
+                            .subscribe(emitter::onSuccess, emitter::onError);
+                    innerDisposables.add(fallbackDisposable);
+                    return;
+                }
+
+                List<Single<String>> translationSingles = new ArrayList<>();
+                for (Element element : elementsToTranslate) {
+                    final String originalChunkHtml = element.html();
+                    translationSingles.add(
+                            // THIS IS THE FIX: Use the correct parameter order.
+                            textUtil.translateHtml(sourceLang, targetLang, originalChunkHtml, progress -> {})
+                                    .onErrorReturn(error -> originalChunkHtml) // On error, use the original HTML chunk
+                                    .subscribeOn(Schedulers.io())
+                    );
+                }
+
+                Disposable zipDisposable = Single.zip(translationSingles, translatedChunks -> {
+                            for (int i = 0; i < translatedChunks.length; i++) {
+                                elementsToTranslate.get(i).html((String) translatedChunks[i]);
+                            }
+                            return doc.html(); // Return the re-assembled, full HTML document
+                        })
+                        .subscribe(
+                                emitter::onSuccess,
+                                emitter::onError
+                        );
+                innerDisposables.add(zipDisposable);
+
+            } catch (Exception e) {
+                emitter.onError(e);
+            }
+        });
     }
     public void cancelTranslation() {
         // This interrupts and cancels all ongoing RxJava jobs added to this CompositeDisposable.
