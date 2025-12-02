@@ -412,4 +412,21 @@ public class EntryRepository {
     public void updateTranslatedSummary(String translatedSummary, long id) {
         entryDao.updateTranslatedSummary(translatedSummary, id);
     }
+
+    // In EntryRepository.java
+    public List<Long> getArticleIdsByFeedId(long feedId, int limit) {
+        return entryDao.getArticleIdsByFeedId(feedId, limit);
+    }
+
+    public List<Long> getRecentlyReadIds(int limit) {
+        return entryDao.getRecentlyReadIds(limit);
+    }
+
+    public List<Long> getBookmarkedIds(int limit) {
+        return entryDao.getBookmarkedIds(limit);
+    }
+
+    public List<Long> getRandomArticleIds(int limit) {
+        return entryDao.getRandomArticleIds(limit);
+    }
 }

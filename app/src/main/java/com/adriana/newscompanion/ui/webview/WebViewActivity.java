@@ -12,6 +12,7 @@ import android.support.v4.media.MediaMetadataCompat;
 import android.support.v4.media.session.MediaControllerCompat;
 import android.support.v4.media.session.MediaSessionCompat;
 import android.support.v4.media.session.PlaybackStateCompat;
+import android.text.TextUtils;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.MenuItem;
@@ -34,6 +35,8 @@ import io.reactivex.rxjava3.disposables.CompositeDisposable;
 import io.reactivex.rxjava3.disposables.Disposable;
 
 import com.adriana.newscompanion.R;
+import com.adriana.newscompanion.data.playlist.Playlist;
+import com.adriana.newscompanion.data.playlist.PlaylistRepository;
 import com.adriana.newscompanion.data.sharedpreferences.SharedPreferencesRepository;
 import com.adriana.newscompanion.model.EntryInfo;
 import com.adriana.newscompanion.service.tts.TtsExtractor;
@@ -54,8 +57,10 @@ import com.google.android.material.snackbar.Snackbar;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -140,6 +145,8 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
     @Inject
     TranslationRepository translationRepository;
+    @Inject  // ADD THIS LINE
+    PlaylistRepository playlistRepository;  // ADD THIS FIELD
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
@@ -1464,5 +1471,69 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     private void updatePlayPauseButtonIcon(boolean playing) {
         int iconRes = playing ? R.drawable.ic_pause : R.drawable.ic_play;
         playPauseButton.setIcon(ContextCompat.getDrawable(this, iconRes));
+    }
+
+
+
+
+
+
+
+    // Add to WebViewActivity.onCreate() or loadEntryContent():
+    private void initializePlaylistSystem() {
+        long currentId = getIntent().getLongExtra("entry_id", -1);
+        if (currentId != -1) {
+            EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
+            if (entryInfo != null) {
+                createOrUpdatePlaylist(currentId, entryInfo.getFeedId());
+            }
+        }
+    }
+
+    private void createOrUpdatePlaylist(long currentEntryId, long feedId) {
+        // Check if we need a new playlist
+        Date latestPlaylistDate = playlistRepository.getLatestPlaylistCreatedDate();
+        boolean needsNewPlaylist = latestPlaylistDate == null ||
+                System.currentTimeMillis() - latestPlaylistDate.getTime() > 3600000; // 1 hour
+
+        if (needsNewPlaylist) {
+            // Create intelligent playlist
+            List<Long> playlistIds = new ArrayList<>();
+
+            // 1. Current feed articles (30%)
+            List<Long> feedArticles = entryRepository.getArticleIdsByFeedId(feedId, 15);
+            playlistIds.addAll(feedArticles);
+
+            // 2. Recently read articles (30%)
+            List<Long> recentRead = entryRepository.getRecentlyReadIds(15);
+            playlistIds.addAll(recentRead);
+
+            // 3. Bookmarked articles (20%)
+            List<Long> bookmarked = entryRepository.getBookmarkedIds(10);
+            playlistIds.addAll(bookmarked);
+
+            // 4. Random articles (20%)
+            List<Long> random = entryRepository.getRandomArticleIds(10);
+            playlistIds.addAll(random);
+
+            // Ensure current article is included
+            if (!playlistIds.contains(currentEntryId)) {
+                playlistIds.add(0, currentEntryId); // Add at beginning
+            }
+
+            // Remove duplicates, limit size
+            Set<Long> uniqueIds = new LinkedHashSet<>(playlistIds);
+            List<Long> finalList = new ArrayList<>(uniqueIds);
+            if (finalList.size() > 50) {
+                finalList = finalList.subList(0, 50);
+            }
+
+            // Save
+            String playlistString = TextUtils.join(",", finalList);
+            Playlist playlist = new Playlist(new Date(), playlistString);
+            playlist.setPlaylist(playlistString);
+            playlist.setCreatedDate(new Date());
+            playlistRepository.insert(playlist);
+        }
     }
 }

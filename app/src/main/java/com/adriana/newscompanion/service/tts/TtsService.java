@@ -226,46 +226,56 @@ public class TtsService extends MediaBrowserServiceCompat {
         public void onSkipToNext() {
             Log.d(TAG, "onSkipToNext called");
 
-            if (ttsPlayer != null) {
-                ttsPlayer.stopTtsPlayback();
-                ContextCompat.getMainExecutor(getApplicationContext()).execute(() -> ttsPlayer.showFakeLoading());
-            }
-
-            if (ttsPlaylist.skipNext()) {
-                preparedData = null;
-                sharedPreferencesRepository.setCurrentReadingEntryId(
-                        Long.parseLong(ttsPlaylist.getCurrentMetadata().getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID))
-                );
-                onPrepare();
-            } else {
+            try {
                 if (ttsPlayer != null) {
-                    ContextCompat.getMainExecutor(getApplicationContext()).execute(() -> ttsPlayer.hideFakeLoading());
-                    ttsPlayer.stopMediaPlayer();
+                    Log.d(TAG, "Stopping TTS playback before skip");
+                    ttsPlayer.stopTtsPlayback();
+                    ContextCompat.getMainExecutor(getApplicationContext()).execute(() -> ttsPlayer.showFakeLoading());
                 }
-            }
-        }
 
-        @Override
-        public void onSkipToPrevious() {
-            Log.d(TAG, "onSkipToPrevious called");
+                Log.d(TAG, "Attempting to skip to next in playlist");
+                boolean skipSuccess = ttsPlaylist.skipNext();
+                Log.d(TAG, "skipNext() returned: " + skipSuccess);
 
-            if (ttsPlayer != null) {
-                ttsPlayer.stopTtsPlayback();
-                ContextCompat.getMainExecutor(getApplicationContext()).execute(() -> ttsPlayer.showFakeLoading());
-            }
+                if (skipSuccess) {
+                    MediaMetadataCompat metadata = ttsPlaylist.getCurrentMetadata();
+                    if (metadata == null) {
+                        Log.e(TAG, "Current metadata is null after skip!");
+                        // Handle gracefully
+                        if (ttsPlayer != null) {
+                            ContextCompat.getMainExecutor(getApplicationContext()).execute(() -> ttsPlayer.hideFakeLoading());
+                        }
+                        return;
+                    }
 
-            if (ttsPlaylist.skipPrevious()) {
-                preparedData = null;
+                    String mediaId = metadata.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID);
+                    Log.d(TAG, "New media ID: " + mediaId);
 
-                sharedPreferencesRepository.setCurrentReadingEntryId(
-                        Long.parseLong(ttsPlaylist.getCurrentMetadata().getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID))
-                );
-
-                onPrepare();
-            } else {
+                    if (mediaId != null) {
+                        preparedData = null;
+                        long newId = Long.parseLong(mediaId);
+                        sharedPreferencesRepository.setCurrentReadingEntryId(newId);
+                        Log.d(TAG, "Setting current reading ID to: " + newId);
+                        onPrepare();
+                    } else {
+                        Log.e(TAG, "Media ID is null in metadata!");
+                    }
+                } else {
+                    Log.w(TAG, "Cannot skip - either at end of playlist or playlist error");
+                    if (ttsPlayer != null) {
+                        ContextCompat.getMainExecutor(getApplicationContext()).execute(() -> {
+                            ttsPlayer.hideFakeLoading();
+                            // Optionally show a toast/snackbar
+                        });
+                        ttsPlayer.stopMediaPlayer();
+                    }
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "CRASH in onSkipToNext: ", e);
+                e.printStackTrace();
+                // Prevent crash
                 if (ttsPlayer != null) {
                     ContextCompat.getMainExecutor(getApplicationContext()).execute(() -> ttsPlayer.hideFakeLoading());
-                    ttsPlayer.stopMediaPlayer();
                 }
             }
         }

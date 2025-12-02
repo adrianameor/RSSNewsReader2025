@@ -244,4 +244,20 @@ public interface EntryDao {
 
     @Query("UPDATE entry_table SET translated_summary = :translatedSummary WHERE id = :id")
     void updateTranslatedSummary(String translatedSummary, long id);
+
+    // FIXED - Use correct table and column names
+    @Query("SELECT id FROM entry_table WHERE feedId = :feedId ORDER BY publishedDate DESC LIMIT :limit")
+    List<Long> getArticleIdsByFeedId(long feedId, int limit);
+
+    // Or simpler version without cutoffDate parameter:
+    @Query("SELECT id FROM entry_table WHERE visitedDate IS NOT NULL ORDER BY visitedDate DESC LIMIT :limit")
+    List<Long> getRecentlyReadIds(int limit);
+
+    // FIXED - bookmark is a String column
+    @Query("SELECT id FROM entry_table WHERE bookmark = 'Y' ORDER BY publishedDate DESC LIMIT :limit")
+    List<Long> getBookmarkedIds(int limit);
+
+    // FIXED - Use entry_table (not entry)
+    @Query("SELECT id FROM entry_table ORDER BY RANDOM() LIMIT :limit")
+    List<Long> getRandomArticleIds(int limit);
 }
