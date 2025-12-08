@@ -451,14 +451,15 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             return;
         }
 
-        Boolean savedViewState = sharedPreferencesRepository.getIsTranslatedView(currentId);
-        if (savedViewState != null) {
-            isTranslatedView = savedViewState;
-        } else {
-            boolean isStartingInTranslatedViewFromIntent = getIntent().getBooleanExtra("is_translated", false);
-            isTranslatedView = isStartingInTranslatedViewFromIntent;
-            sharedPreferencesRepository.setIsTranslatedView(currentId, isTranslatedView);
-        }
+        // --- THIS IS THE FIX ---
+        // For the initial load, the instruction from the Intent (from the article list)
+        // is ALWAYS the highest priority. We ignore any old saved state.
+        boolean isStartingInTranslatedViewFromIntent = getIntent().getBooleanExtra("is_translated", false);
+        isTranslatedView = isStartingInTranslatedViewFromIntent;
+
+        // We can still save this new state, so it's remembered if the user toggles it later.
+        sharedPreferencesRepository.setIsTranslatedView(currentId, isTranslatedView);
+        // --- END OF FIX ---
 
         String htmlToLoad;
         String titleToDisplay;
@@ -1364,6 +1365,11 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     }
 
     private class MediaBrowserConnection extends MediaBrowserHelper {
+        // --- THIS IS PART OF THE FIX ---
+        // Add a flag to track if preparation has already been requested for this connection.
+        private boolean isPreparationRequested = false;
+        // ---
+
         private MediaBrowserConnection(Context context) {
             super(context, TtsService.class);
         }
@@ -1374,9 +1380,30 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
             final MediaControllerCompat mediaController = getMediaController();
             if (mediaController != null) {
+
+                // --- THIS IS THE FIX ---
+                // Add a guard to break the infinite loop. This block will now only run ONCE.
+                if (isPreparationRequested) {
+                    Log.e("LIFECYCLE_DEBUG", "onChildrenLoaded: Preparation already requested, ignoring subsequent call to prevent loop.");
+                    return; // Do nothing on the second (and all subsequent) calls.
+                }
+                isPreparationRequested = true; // Set the flag so this only runs once.
+                // --- END OF FIX ---
+
+                // This logic is now safe because it will only execute one time.
+                String entryIdString = String.valueOf(getIntent().getLongExtra("entry_id", -1));
+                if (!"-1".equals(entryIdString)) {
+                    Log.e("LIFECYCLE_DEBUG", "--- Client is connected. Sending onPrepareFromMediaId command for ID: " + entryIdString + " ---");
+                    mediaController.getTransportControls().prepareFromMediaId(entryIdString, null);
+                } else {
+                    Log.e("LIFECYCLE_DEBUG", "Client connected but entryId is invalid.");
+                }
+
+                // We can still set these callbacks here.
                 ttsPlayer.setWebViewCallback(WebViewActivity.this);
                 ttsPlayer.setWebViewConnected(true);
-                mediaController.getTransportControls().prepare();
+            } else {
+                Log.e("LIFECYCLE_DEBUG", "onChildrenLoaded: MediaController is NULL!");
             }
         }
     }

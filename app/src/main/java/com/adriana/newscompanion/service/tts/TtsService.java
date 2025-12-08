@@ -16,6 +16,7 @@ import androidx.annotation.Nullable;
 import androidx.core.content.ContextCompat;
 import androidx.media.MediaBrowserServiceCompat;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import javax.inject.Inject;
@@ -23,16 +24,19 @@ import javax.inject.Inject;
 import dagger.hilt.android.AndroidEntryPoint;
 import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
 import io.reactivex.rxjava3.core.Completable;
+import io.reactivex.rxjava3.disposables.CompositeDisposable;
+import io.reactivex.rxjava3.disposables.Disposable;
 import io.reactivex.rxjava3.schedulers.Schedulers;
 import com.adriana.newscompanion.data.entry.Entry;
 import com.adriana.newscompanion.data.entry.EntryRepository;
+import com.adriana.newscompanion.data.playlist.PlaylistRepository;
 import com.adriana.newscompanion.data.sharedpreferences.SharedPreferencesRepository;
 import com.adriana.newscompanion.model.EntryInfo;
 import com.adriana.newscompanion.ui.webview.WebViewListener;
 
 @AndroidEntryPoint
 public class TtsService extends MediaBrowserServiceCompat {
-
+    private final CompositeDisposable disposables = new CompositeDisposable();
     private static final String TAG = "TtsService";
 
     @Inject
@@ -43,10 +47,13 @@ public class TtsService extends MediaBrowserServiceCompat {
     SharedPreferencesRepository sharedPreferencesRepository;
     @Inject
     EntryRepository entryRepository;
+    @Inject
+    PlaylistRepository playlistRepository;
     private TtsNotification ttsNotification;
     private static MediaSessionCompat mediaSession;
     private MediaMetadataCompat preparedData;
     private boolean serviceInStartedState;
+    private boolean isPreparing = false;
     private static MediaSessionCompat mediaSessionInstance;
 
     @Override
@@ -92,6 +99,7 @@ public class TtsService extends MediaBrowserServiceCompat {
     @Override
     public void onDestroy() {
         Log.d(TAG, "destroyed");
+        disposables.clear();
         ttsPlayer.stop();
         mediaSession.release();
         super.onDestroy();
@@ -111,78 +119,128 @@ public class TtsService extends MediaBrowserServiceCompat {
 
     @Override
     public void onLoadChildren(@NonNull String parentId, @NonNull Result<List<MediaBrowserCompat.MediaItem>> result) {
-        preparedData = ttsPlaylist.getCurrentMetadata();
+        // We revert to the simplest possible implementation.
+        // The responsibility of loading the playlist and preparing the data now belongs
+        // to the onPrepareFromMediaId method, which is triggered by the client.
+        // This method will now only return the media items AFTER they have been prepared.
         result.sendResult(ttsPlaylist.getMediaItems());
     }
 
     private final MediaSessionCompat.Callback callback = new MediaSessionCompat.Callback() {
 
+        // The onPrepare method is now deprecated in our new flow, but we keep it to avoid crashes.
         @Override
         public void onPrepare() {
-            Log.d(TAG, "onPrepare called");
-            Completable.fromAction(() -> {
-                if (!ttsPlayer.isPausedManually()) {
-                    ttsPlayer.setupMediaPlayer(false);
-                }
-                if (ttsPlayer.ttsIsNull()) {
-                    ttsPlayer.initTts(TtsService.this, new TtsPlayerListener(), callback);
-                }
-                long currentReadingId = sharedPreferencesRepository.getCurrentReadingEntryId();
-                boolean isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(currentReadingId);
+            Log.w(TAG, "onPrepare() was called directly, but this is deprecated. The client should call onPrepareFromMediaId instead.");
+            // Do nothing.
+        }
 
-                Entry entry = entryRepository.getEntryById(currentReadingId);
-                if (entry == null) {
-                    Log.w(TAG, "Entry not found for ID: " + currentReadingId);
-                    return;
-                }
+        @Override
+        public void onPrepareFromMediaId(String mediaId, Bundle extras) {
+            Log.e("LIFECYCLE_DEBUG", "--- 2. onPrepareFromMediaId called with ID: " + mediaId + " ---");
 
-                String original = entry.getContent();
-                String translated = entry.getTranslated();
+            // --- THIS IS THE FIX for the race condition ---
+            if (isPreparing) {
+                Log.w(TAG, "onPrepareFromMediaId called while already preparing. Ignoring request.");
+                return;
+            }
+            isPreparing = true; // Lock: Set the flag immediately.
+            // --- END OF FIX ---
 
-                Log.d(TAG, "isTranslatedView = " + isTranslatedView);
-                Log.d(TAG, "original length = " + (original == null ? "null" : original.length()));
-                Log.d(TAG, "translated length = " + (translated == null ? "null" : translated.length()));
+            long entryId;
+            try {
+                entryId = Long.parseLong(mediaId);
+            } catch (NumberFormatException e) {
+                Log.e(TAG, "Invalid mediaId passed to onPrepareFromMediaId", e);
+                isPreparing = false;
+                return;
+            }
 
-                String content = (isTranslatedView && translated != null && !translated.trim().isEmpty())
-                        ? translated
-                        : original;
+            Disposable onPrepareDisposable = Completable.fromAction(() -> {
+                        Log.e("LIFECYCLE_DEBUG", "3. onPrepareFromMediaId: Background task STARTED.");
 
-                EntryInfo entryInfo = entryRepository.getEntryInfoById(currentReadingId);
-                String feedLanguage = entryInfo.getFeedLanguage();
-                if (feedLanguage == null || feedLanguage.isEmpty()) {
-                    feedLanguage = "en";
-                }
+                        // 1. Get the full playlist of IDs from the repository.
+                        String playlistIdString = playlistRepository.getLatestPlaylist();
+                        List<Long> playlistIds = new ArrayList<>();
+                        if (playlistIdString != null && !playlistIdString.isEmpty()) {
+                            String[] ids = playlistIdString.split(",");
+                            for (String idStr : ids) {
+                                if (!idStr.isEmpty()) {
+                                    try {
+                                        playlistIds.add(Long.parseLong(idStr));
+                                    } catch (NumberFormatException e) {
+                                        Log.e(TAG, "Failed to parse ID from playlist string: " + idStr, e);
+                                    }
+                                }
+                            }
+                        }
 
-                String targetLanguage = sharedPreferencesRepository.getDefaultTranslationLanguage();
-                if (targetLanguage == null || targetLanguage.isEmpty()) {
-                    targetLanguage = "zh";
-                }
+                        // 2. Give the fresh, complete playlist to our TtsPlaylist instance.
+                        ttsPlaylist.setPlaylist(playlistIds, entryId);
 
-                String languageToUse = isTranslatedView ? targetLanguage : feedLanguage;
+                        // 3. Now that the playlist is correctly initialized, get the metadata.
+                        preparedData = ttsPlaylist.getCurrentMetadata();
+                        Log.e("LIFECYCLE_DEBUG", "4. onPrepareFromMediaId: Background task FINISHED. preparedData is " + (preparedData == null ? "NULL" : "NOT NULL"));
 
-                preparedData = ttsPlaylist.getCurrentMetadata();
-                if (!mediaSession.isActive()) {
-                    mediaSession.setActive(true);
-                }
-                mediaSession.setMetadata(preparedData);
-                ttsPlayer.setTtsSpeechRate(Float.parseFloat(preparedData.getString("ttsSpeechRate")));
+                        if (preparedData == null) {
+                            throw new IllegalStateException("PreparedData is null after loading, cannot prepare playback.");
+                        }
 
-                long mediaId = Long.parseLong(preparedData.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID));
-                long feedId = preparedData.getLong("feedId");
+                        // The rest of the preparation logic remains the same.
+                        if (!ttsPlayer.isPausedManually()) {
+                            ttsPlayer.setupMediaPlayer(false);
+                        }
+                        if (ttsPlayer.ttsIsNull()) {
+                            ttsPlayer.initTts(TtsService.this, new TtsPlayerListener(), callback);
+                        }
 
-                if (mediaId != currentReadingId) {
-                    Log.d(TAG, "Skipping extract() — not the currently viewed entry");
-                    return;
-                }
+                        boolean isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(entryId);
+                        Entry entry = entryRepository.getEntryById(entryId);
+                        if (entry == null) {
+                            throw new IllegalStateException("Entry not found for ID: " + entryId);
+                        }
 
-                ttsPlayer.stopTtsPlayback();
+                        String original = entry.getContent();
+                        String translated = entry.getTranslated();
+                        String content = (isTranslatedView && translated != null && !translated.trim().isEmpty()) ? translated : original;
 
-                ttsPlayer.extract(mediaId, feedId, content, languageToUse);
+                        EntryInfo entryInfo = entryRepository.getEntryInfoById(entryId);
+                        String feedLanguage = (entryInfo != null && entryInfo.getFeedLanguage() != null) ? entryInfo.getFeedLanguage() : "en";
+                        String targetLanguage = sharedPreferencesRepository.getDefaultTranslationLanguage();
+                        String languageToUse = isTranslatedView ? targetLanguage : feedLanguage;
 
-                if (!ttsPlayer.isPausedManually()) {
-                    ttsPlayer.speak();
-                }
-            }).subscribeOn(Schedulers.io()).observeOn(AndroidSchedulers.mainThread()).subscribe();
+                        ttsPlayer.stopTtsPlayback();
+                        ttsPlayer.extract(entryId, entry.getFeedId(), content, languageToUse);
+                    })
+                    .subscribeOn(Schedulers.newThread())
+                    .observeOn(AndroidSchedulers.mainThread())
+                    .subscribe(() -> {
+                        Log.e("LIFECYCLE_DEBUG", "--- 5. onPrepareFromMediaId onComplete (Main Thread) ---");
+                        isPreparing = false;
+                        if (preparedData != null) {
+                            if (!mediaSession.isActive()) {
+                                mediaSession.setActive(true);
+                            }
+                            mediaSession.setMetadata(preparedData);
+                            ttsPlayer.setTtsSpeechRate(Float.parseFloat(preparedData.getString("ttsSpeechRate")));
+
+                            // --- THIS IS THE FIX for getRoot() ---
+                            // We use the correct rootId string defined in your onGetRoot() method.
+                            notifyChildrenChanged("success");
+                            // --- END OF FIX ---
+                        } else {
+                            Log.e("LIFECYCLE_DEBUG", "onComplete: FATAL - preparedData is NULL! CANNOT notify children.");
+                        }
+
+                        if (!ttsPlayer.isPausedManually()) {
+                            ttsPlayer.speak();
+                        }
+                    }, error -> {
+                        Log.e("LIFECYCLE_DEBUG", "--- X. onPrepareFromMediaId onError (Main Thread) ---", error);
+                    isPreparing = false;
+                    });
+
+            disposables.add(onPrepareDisposable);
         }
 
         @Override
@@ -216,67 +274,108 @@ public class TtsService extends MediaBrowserServiceCompat {
                 ContextCompat.getMainExecutor(getApplicationContext()).execute(() -> ttsPlayer.hideFakeLoading());
             }
 
-            ttsPlaylist.updatePlayingId(0);
-            mediaSession.setActive(false);
-            stopSelf();
+            //ttsPlaylist.updatePlayingId(0);
+            //mediaSession.setActive(false);
+            //stopSelf();
             updatePlaybackState(PlaybackStateCompat.STATE_STOPPED);
         }
+
 
         @Override
         public void onSkipToNext() {
             Log.d(TAG, "onSkipToNext called");
 
-            try {
-                if (ttsPlayer != null) {
-                    Log.d(TAG, "Stopping TTS playback before skip");
-                    ttsPlayer.stopTtsPlayback();
-                    ContextCompat.getMainExecutor(getApplicationContext()).execute(() -> ttsPlayer.showFakeLoading());
-                }
+            // --- THIS IS THE FINAL FIX ---
+            // 1. Stop any current playback.
+            if (ttsPlayer != null) {
+                ttsPlayer.stopTtsPlayback();
+            }
+            updatePlaybackState(PlaybackStateCompat.STATE_STOPPED);
 
-                Log.d(TAG, "Attempting to skip to next in playlist");
-                boolean skipSuccess = ttsPlaylist.skipNext();
-                Log.d(TAG, "skipNext() returned: " + skipSuccess);
+            // 2. Try to move to the next item in the stateful playlist.
+            if (ttsPlaylist.skipNext()) {
+                // 3. If successful, call our NEW, lightweight helper method.
+                prepareAndPlayCurrentTrack();
+            } else {
+                Log.w(TAG, "Cannot skip next: at the end of the playlist.");
+                updatePlaybackState(PlaybackStateCompat.STATE_STOPPED);
+            }
+            // --- END OF FIX ---
+        }
 
-                if (skipSuccess) {
-                    MediaMetadataCompat metadata = ttsPlaylist.getCurrentMetadata();
-                    if (metadata == null) {
-                        Log.e(TAG, "Current metadata is null after skip!");
-                        // Handle gracefully
-                        if (ttsPlayer != null) {
-                            ContextCompat.getMainExecutor(getApplicationContext()).execute(() -> ttsPlayer.hideFakeLoading());
-                        }
-                        return;
-                    }
+        @Override
+        public void onSkipToPrevious() {
+            Log.d(TAG, "onSkipToPrevious called");
 
-                    String mediaId = metadata.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID);
-                    Log.d(TAG, "New media ID: " + mediaId);
+            // --- THIS IS THE FINAL FIX ---
+            // The logic is identical for skipping previous.
+            if (ttsPlayer != null) {
+                ttsPlayer.stopTtsPlayback();
+            }
+            updatePlaybackState(PlaybackStateCompat.STATE_STOPPED);
 
-                    if (mediaId != null) {
-                        preparedData = null;
-                        long newId = Long.parseLong(mediaId);
-                        sharedPreferencesRepository.setCurrentReadingEntryId(newId);
-                        Log.d(TAG, "Setting current reading ID to: " + newId);
-                        onPrepare();
-                    } else {
-                        Log.e(TAG, "Media ID is null in metadata!");
-                    }
-                } else {
-                    Log.w(TAG, "Cannot skip - either at end of playlist or playlist error");
-                    if (ttsPlayer != null) {
-                        ContextCompat.getMainExecutor(getApplicationContext()).execute(() -> {
-                            ttsPlayer.hideFakeLoading();
-                            // Optionally show a toast/snackbar
-                        });
-                        ttsPlayer.stopMediaPlayer();
-                    }
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "CRASH in onSkipToNext: ", e);
-                e.printStackTrace();
-                // Prevent crash
-                if (ttsPlayer != null) {
-                    ContextCompat.getMainExecutor(getApplicationContext()).execute(() -> ttsPlayer.hideFakeLoading());
-                }
+            if (ttsPlaylist.skipPrevious()) {
+                prepareAndPlayCurrentTrack();
+            } else {
+                Log.w(TAG, "Cannot skip previous: at the start of the playlist.");
+                updatePlaybackState(PlaybackStateCompat.STATE_STOPPED);
+            }
+            // --- END OF FIX ---
+        }
+
+        /**
+         * This is the new, lightweight helper for changing tracks.
+         * It prepares and plays the currently selected track in the playlist
+         * without re-initializing the entire session.
+         */
+        private void prepareAndPlayCurrentTrack() {
+            preparedData = ttsPlaylist.getCurrentMetadata();
+            if (preparedData == null) {
+                Log.e(TAG, "prepareAndPlayCurrentTrack failed: metadata was null.");
+                return;
+            }
+
+            // Update the media session with the new track's info so the notification/lock screen updates.
+            mediaSession.setMetadata(preparedData);
+            long entryId = Long.parseLong(preparedData.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID));
+            sharedPreferencesRepository.setCurrentReadingEntryId(entryId);
+
+            // Run the text extraction and speak command on a background thread.
+            Disposable trackPreparationDisposable = Completable.fromAction(() -> {
+                        // This logic is copied from onPrepareFromMediaId, but is now used for track changes.
+                        boolean isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(entryId);
+                        Entry entry = entryRepository.getEntryById(entryId);
+                        if (entry == null) return;
+
+                        String content = (isTranslatedView && entry.getTranslated() != null && !entry.getTranslated().trim().isEmpty())
+                                ? entry.getTranslated()
+                                : entry.getContent();
+
+                        String languageToUse = (isTranslatedView)
+                                ? sharedPreferencesRepository.getDefaultTranslationLanguage()
+                                : entryRepository.getEntryInfoById(entryId).getFeedLanguage();
+
+                        ttsPlayer.extract(entryId, entry.getFeedId(), content, languageToUse);
+                    })
+                    .subscribeOn(Schedulers.io())
+                    .observeOn(AndroidSchedulers.mainThread())
+                    .subscribe(() -> {
+                        // Once extraction is complete, tell the player to speak.
+                        Log.d(TAG, "Track preparation complete, calling speak().");
+                        ttsPlayer.speak();
+                    }, error -> {
+                        Log.e(TAG, "Error during prepareAndPlayCurrentTrack", error);
+                    });
+
+            disposables.add(trackPreparationDisposable);
+        }
+
+        private void play() {
+            // The main play button can now use the modern entry point if data isn't ready.
+            if (preparedData == null) {
+                onPrepareFromMediaId(String.valueOf(sharedPreferencesRepository.getCurrentReadingEntryId()), null);
+            } else {
+                ttsPlayer.play();
             }
         }
 
@@ -323,15 +422,6 @@ public class TtsService extends MediaBrowserServiceCompat {
                     break;
                 default:
                     Log.w(TAG, "Unhandled custom action: " + action);
-            }
-        }
-
-        private void play() {
-            if (preparedData == null) {
-                onPrepare();
-            } else {
-                ttsPlayer.play();
-                ttsPlayer.setUiControlPlayback(false);
             }
         }
 
