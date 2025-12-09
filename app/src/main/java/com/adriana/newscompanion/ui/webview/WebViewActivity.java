@@ -505,6 +505,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         }
 
         sharedPreferencesRepository.setCurrentReadingEntryId(currentId);
+        initializePlaylistSystem();
         syncLoadingWithTts();
     }
 
@@ -935,6 +936,23 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
     private void switchReadMode() {
         functionButtonsReadingMode.setVisibility(View.VISIBLE);
+
+        // Load and set the playlist for navigation in reading mode
+        String playlistIdString = playlistRepository.getLatestPlaylist();
+        List<Long> playlistIds = new ArrayList<>();
+        if (playlistIdString != null && !playlistIdString.isEmpty()) {
+            String[] ids = playlistIdString.split(",");
+            for (String idStr : ids) {
+                if (!idStr.isEmpty()) {
+                    try {
+                        playlistIds.add(Long.parseLong(idStr));
+                    } catch (NumberFormatException e) {
+                        Log.e(TAG, "Failed to parse ID from playlist string: " + idStr, e);
+                    }
+                }
+            }
+        }
+        ttsPlaylist.setPlaylist(playlistIds, currentId);
 
         webView.setWebViewClient(new ReadingWebClient());
 

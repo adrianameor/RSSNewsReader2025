@@ -44,6 +44,7 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
 
     public static final String TAG = TtsPlayer.class.getSimpleName();
 
+    private UtteranceProgressListener utteranceListener;
     private TextToSpeech tts;
     private PlaybackStateListener listener;
     private MediaSessionCompat.Callback callback;
@@ -198,62 +199,69 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
         }
     }
 
-    public void extract(long currentId, long feedId, String content, String language) {
-        Log.d(TAG, "Switching to new article: ID=" + currentId);
+    // --- THIS IS THE NEW, SIMPLIFIED, SYNCHRONOUS EXTRACT METHOD ---
+    public boolean extract(long currentId, long feedId, String content, String language) {
+        Log.d(TAG, "Starting synchronous extract for article: ID=" + currentId);
 
-        boolean wasSpeaking = tts != null && tts.isSpeaking();
-        isPausedManually = !wasSpeaking && sharedPreferencesRepository.getIsPausedManually();
-        sharedPreferencesRepository.setIsPausedManually(isPausedManually);
-        Log.d(TAG, "Detected isPausedManually = " + isPausedManually);
-
-        if (tts != null && tts.isSpeaking()) {
-            Log.d(TAG, "stop current TTS");
-            tts.stop();
-        }
-
-        isPreparing = true;
-        isSettingUpNewArticle = true;
-        sentences = new ArrayList<>();
-        isArticleFinished = false;
-
-        this.language = language;
+        // 1. Reset all state flags for the new article.
+        this.isPreparing = true;
+        this.isArticleFinished = false;
+        this.sentenceCounter = 0;
+        this.isManualSkip = false;
+        this.sentences.clear();
         this.currentId = currentId;
         this.feedId = feedId;
-        hasSpokenAfterSetup = false;
-        countDownLatch = new CountDownLatch(1);
+        this.language = language;
+        this.hasSpokenAfterSetup = false;
 
+        // Lock the language in the extractor if provided.
         if (language != null && !language.isEmpty()) {
             ttsExtractor.setCurrentLanguage(language, true);
-            Log.d(TAG, "[extract] Locked language = " + language);
         }
 
-        if (content != null) {
-            new Thread(() -> {
-                extractToTts(content, language);
+        if (content == null || content.trim().isEmpty()) {
+            Log.e(TAG, "extract: No content provided. Extraction failed.");
+            isPreparing = false;
+            return false;
+        }
 
-                try {
-                    countDownLatch.await();
+        // 2. Perform the sentence splitting logic SYNCHRONOUSLY on the calling thread.
+        String[] raw = content.split(Pattern.quote(ttsExtractor.delimiter));
+        List<String> sentenceList = new ArrayList<>(raw.length);
+        for (String part : raw) {
+            String trimmed = part.trim();
+            if (!trimmed.isEmpty()) {
+                sentenceList.add(trimmed);
+            }
+        }
 
-                    if (isInit) {
-                        setupTts();
-                        if (!isPausedManually) {
-                            Log.d(TAG, "TTS ready and not manually paused — auto speaking");
-                            speak();
-                        } else {
-                            Log.d(TAG, "TTS ready but paused manually — not speaking");
-                        }
-                    } else {
-                        Log.d(TAG, "TTS not initialized yet, setting actionNeeded = true");
-                        actionNeeded = true;
-                    }
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
+        for (String sentence : sentenceList) {
+            if (sentence.length() >= TextToSpeech.getMaxSpeechInputLength()) {
+                BreakIterator iterator = BreakIterator.getSentenceInstance();
+                iterator.setText(sentence);
+                int start = iterator.first();
+                for (int end = iterator.next(); end != BreakIterator.DONE; start = end, end = iterator.next()) {
+                    this.sentences.add(sentence.substring(start, end));
                 }
-            }).start();
-        } else {
-            ttsExtractor.setCallback(this);
-            ttsExtractor.prioritize();
+            } else {
+                this.sentences.add(sentence);
+            }
         }
+
+        // 3. Perform final checks.
+        if (this.sentences.size() < 2) {
+            Log.w(TAG, "Extracted less than 2 sentences. Considering this a failure.");
+            this.sentences.clear();
+            isPreparing = false;
+            return false;
+        }
+
+        int savedProgress = entryRepository.getSentCount(this.currentId);
+        this.sentenceCounter = Math.min(savedProgress, Math.max(0, this.sentences.size() - 1));
+
+        Log.d(TAG, "Synchronous extract finished. " + this.sentences.size() + " sentences ready. Starting at #" + this.sentenceCounter);
+        isPreparing = false; // Mark preparation as complete.
+        return true;
     }
 
     @Override
@@ -326,57 +334,31 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
         }).start();
     }
 
-    private void setupTts() {
-        ContextCompat.getMainExecutor(context).execute(() -> {
-            Log.d(TAG, "[setupTts] currentLanguage = " + language + ", isLockedByTtsPlayer = " + ttsExtractor.isLocked() + ", ttsExtractor.language = " + ttsExtractor.getCurrentLanguage());
-            if (sentences == null || sentences.isEmpty()) {
-                Log.w(TAG, "No content to read in setupTts(), skipping...");
-                return;
+    public void setupTts() {
+        // --- THIS IS THE NEW, SIMPLIFIED, SYNCHRONOUS SETUP METHOD ---
+        Log.d(TAG, "setupTts() called.");
+        if (sentences == null || sentences.isEmpty()) {            Log.w(TAG, "No content to read in setupTts(), skipping language set.");
+            return;
+        }
+
+        if (language == null || language.isEmpty()) {
+            Log.w(TAG, "Warning: Language is null or empty, defaulting to English.");
+            language = "en";
+        }
+
+        try {
+            Log.d(TAG, "Setting TTS language to: " + language);
+            int result = tts.setLanguage(new Locale(language));
+            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                Log.e(TAG, "Language not supported by TTS engine: " + language + ". Defaulting to English.");
+                tts.setLanguage(Locale.ENGLISH);
             }
-
-            isPreparing = false;
-
-            if (webViewCallback != null) {
-                webViewCallback.finishedSetup();
-                webViewCallback.updateLoadingProgress(100);
-                webViewCallback.hideFakeLoading();
-            }
-
-            if (webViewCallback instanceof WebViewActivity) {
-                ((WebViewActivity) webViewCallback).syncLoadingWithTts();
-            }
-
-            if (language == null || language.isEmpty()) {
-                Log.w(TAG, "Warning: Language is null or empty, defaulting to English.");
-                language = "en";
-            }
-
-            try {
-                Log.d(TAG, "Setting TTS language to: " + language);
-                Log.d(TAG, "setupTts() using language: " + language);
-                setLanguage(new Locale(language), true);
-            } catch (Exception e) {
-                Log.d(TAG, "Invalid locale " + e.getMessage());
-                setLanguage(Locale.ENGLISH, true);
-            }
-
-            new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                isSettingUpNewArticle = false;
-
-                if (sentences.size() > 0 && !isPausedManually && !hasSpokenAfterSetup) {
-                    hasSpokenAfterSetup = true;
-                    speak();
-                    if (webViewCallback != null) {
-                        Log.d(TAG, "Hiding fake loading after TTS starts.");
-                        webViewCallback.hideFakeLoading();
-                    } else {
-                        Log.w(TAG, "webViewCallback is null, cannot hideFakeLoading.");
-                    }
-                } else {
-                    Log.d(TAG, "TTS ready, but paused manually or no content. Waiting for user to resume.");
-                }
-            }, 200);
-        });
+        } catch (Exception e) {
+            Log.e(TAG, "Invalid locale provided to TTS engine: " + language, e);
+            tts.setLanguage(Locale.ENGLISH);
+        }
+        // It no longer calls speak() on its own. The service is now in charge of that.
+        // --- END OF NEW METHOD ---
     }
 
     private void identifyLanguage(String sentence, boolean fromService) {
@@ -461,6 +443,12 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
                 String sentence = sentences.get(sentenceCounter);
                 Log.d(TAG, "TTS Speaking [#" + sentenceCounter + "]: " + sentence);
                 int queueMode = isManualSkip ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD;
+                // --- THIS IS PART 1 OF THE FIX ---
+                // Reset the flag immediately after its one-time use.
+                if (isManualSkip) {
+                    isManualSkip = false;
+                }
+                // --- END OF FIX ---
                 tts.speak(sentence, queueMode, null, TextToSpeech.ACTION_TTS_QUEUE_PROCESSING_COMPLETED);
                 setUiControlPlayback(true);
                 setNewState(PlaybackStateCompat.STATE_PLAYING);
@@ -698,4 +686,18 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
     public int getCurrentExtractProgress() {
         return currentExtractProgress;
     }
+    // --- THIS IS PART 2 OF THE FIX ---
+    /**
+     * Resets all state flags to prepare for a completely new article.
+     * This is called by the TtsService before starting a new track.
+     */
+    public void resetStateForNewArticle() {
+        Log.d(TAG, "Resetting player state for new article.");
+        this.isArticleFinished = false;
+        this.sentenceCounter = 0;
+        this.isManualSkip = false;
+        this.sentences.clear(); // Clear out old sentence data
+    }
+    // --- END OF FIX ---
+
 }

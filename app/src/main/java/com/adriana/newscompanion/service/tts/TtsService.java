@@ -223,18 +223,12 @@ public class TtsService extends MediaBrowserServiceCompat {
                             }
                             mediaSession.setMetadata(preparedData);
                             ttsPlayer.setTtsSpeechRate(Float.parseFloat(preparedData.getString("ttsSpeechRate")));
-
-                            // --- THIS IS THE FIX for getRoot() ---
-                            // We use the correct rootId string defined in your onGetRoot() method.
                             notifyChildrenChanged("success");
-                            // --- END OF FIX ---
-                        } else {
-                            Log.e("LIFECYCLE_DEBUG", "onComplete: FATAL - preparedData is NULL! CANNOT notify children.");
                         }
 
-                        if (!ttsPlayer.isPausedManually()) {
+                        /*if (!ttsPlayer.isPausedManually()) {
                             ttsPlayer.speak();
-                        }
+                        }*/
                     }, error -> {
                         Log.e("LIFECYCLE_DEBUG", "--- X. onPrepareFromMediaId onError (Main Thread) ---", error);
                     isPreparing = false;
@@ -280,14 +274,12 @@ public class TtsService extends MediaBrowserServiceCompat {
             updatePlaybackState(PlaybackStateCompat.STATE_STOPPED);
         }
 
-
         @Override
         public void onSkipToNext() {
             Log.d(TAG, "onSkipToNext called");
-
-            // --- THIS IS THE FINAL FIX ---
             // 1. Stop any current playback.
             if (ttsPlayer != null) {
+                ttsPlayer.resetStateForNewArticle();
                 ttsPlayer.stopTtsPlayback();
             }
             updatePlaybackState(PlaybackStateCompat.STATE_STOPPED);
@@ -306,10 +298,9 @@ public class TtsService extends MediaBrowserServiceCompat {
         @Override
         public void onSkipToPrevious() {
             Log.d(TAG, "onSkipToPrevious called");
-
-            // --- THIS IS THE FINAL FIX ---
             // The logic is identical for skipping previous.
             if (ttsPlayer != null) {
+                ttsPlayer.resetStateForNewArticle();
                 ttsPlayer.stopTtsPlayback();
             }
             updatePlaybackState(PlaybackStateCompat.STATE_STOPPED);
@@ -320,14 +311,8 @@ public class TtsService extends MediaBrowserServiceCompat {
                 Log.w(TAG, "Cannot skip previous: at the start of the playlist.");
                 updatePlaybackState(PlaybackStateCompat.STATE_STOPPED);
             }
-            // --- END OF FIX ---
         }
 
-        /**
-         * This is the new, lightweight helper for changing tracks.
-         * It prepares and plays the currently selected track in the playlist
-         * without re-initializing the entire session.
-         */
         private void prepareAndPlayCurrentTrack() {
             preparedData = ttsPlaylist.getCurrentMetadata();
             if (preparedData == null) {
@@ -335,34 +320,44 @@ public class TtsService extends MediaBrowserServiceCompat {
                 return;
             }
 
-            // Update the media session with the new track's info so the notification/lock screen updates.
             mediaSession.setMetadata(preparedData);
             long entryId = Long.parseLong(preparedData.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID));
             sharedPreferencesRepository.setCurrentReadingEntryId(entryId);
 
-            // Run the text extraction and speak command on a background thread.
+            // This is our single, reliable background task for track changes
             Disposable trackPreparationDisposable = Completable.fromAction(() -> {
-                        // This logic is copied from onPrepareFromMediaId, but is now used for track changes.
+                        // --- THIS IS THE FINAL, CORRECT FLOW ---
+                        // 1. Get the content for the player.
                         boolean isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(entryId);
                         Entry entry = entryRepository.getEntryById(entryId);
-                        if (entry == null) return;
-
+                        if (entry == null) {
+                            throw new IllegalStateException("Entry not found for ID: " + entryId);
+                        }
                         String content = (isTranslatedView && entry.getTranslated() != null && !entry.getTranslated().trim().isEmpty())
                                 ? entry.getTranslated()
                                 : entry.getContent();
-
                         String languageToUse = (isTranslatedView)
                                 ? sharedPreferencesRepository.getDefaultTranslationLanguage()
                                 : entryRepository.getEntryInfoById(entryId).getFeedLanguage();
 
-                        ttsPlayer.extract(entryId, entry.getFeedId(), content, languageToUse);
+                        // 2. Call the synchronous extract method on this background thread.
+                        boolean success = ttsPlayer.extract(entryId, entry.getFeedId(), content, languageToUse);
+                        if (!success) {
+                            throw new IllegalStateException("Extraction failed for entry ID: " + entryId);
+                        }
+
+                        // 3. Call the new synchronous setup method on this background thread.
+                        ttsPlayer.setupTts();
+                        // --- END OF BACKGROUND WORK ---
                     })
-                    .subscribeOn(Schedulers.io())
-                    .observeOn(AndroidSchedulers.mainThread())
+                    .subscribeOn(Schedulers.io()) // Run all background work on a single background thread.
+                    .observeOn(AndroidSchedulers.mainThread()) // Switch to the main thread for the final command.
                     .subscribe(() -> {
-                        // Once extraction is complete, tell the player to speak.
+                        // 4. Now that everything is prepared, tell the player to speak.
                         Log.d(TAG, "Track preparation complete, calling speak().");
-                        ttsPlayer.speak();
+                        if (!ttsPlayer.isPausedManually()) {
+                            ttsPlayer.speak();
+                        }
                     }, error -> {
                         Log.e(TAG, "Error during prepareAndPlayCurrentTrack", error);
                     });
