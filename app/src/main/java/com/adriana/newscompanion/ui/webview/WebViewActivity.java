@@ -148,6 +148,76 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     @Inject  // ADD THIS LINE
     PlaylistRepository playlistRepository;  // ADD THIS FIELD
 
+    private boolean isLoadingFromNewIntent = false; // Flag to prevent MediaBrowser interference
+    
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        
+        long newEntryId = intent.getLongExtra("entry_id", -1);
+        String newEntryTitle = intent.getStringExtra("entry_title");
+        
+        Log.e("BLACKBOX_DEBUG", "========================================");
+        Log.e("BLACKBOX_DEBUG", "onNewIntent CALLED");
+        Log.e("BLACKBOX_DEBUG", "New entry_id: " + newEntryId);
+        Log.e("BLACKBOX_DEBUG", "New entry_title: " + newEntryTitle);
+        Log.e("BLACKBOX_DEBUG", "Old currentId: " + currentId);
+        Log.e("BLACKBOX_DEBUG", "isReadingMode: " + isReadingMode);
+        Log.e("BLACKBOX_DEBUG", "========================================");
+        
+        // Set flag to prevent MediaBrowser from interfering
+        isLoadingFromNewIntent = true;
+        
+        // Update the activity's intent to the new one
+        setIntent(intent);
+        
+        // Stop any ongoing TTS playback from the previous article
+        if (ttsPlayer != null && ttsPlayer.isSpeaking()) {
+            ttsPlayer.stopTtsPlayback();
+            Log.e("BLACKBOX_DEBUG", "Stopped TTS playback");
+        }
+        
+        // Stop media browser if in play mode
+        if (!isReadingMode && mMediaBrowserHelper != null) {
+            Log.e("BLACKBOX_DEBUG", "Stopping MediaBrowser");
+            mMediaBrowserHelper.getTransportControls().stop();
+            mMediaBrowserHelper.onStop();
+        }
+        
+        // Clear the WebView to prepare for new content
+        if (webView != null) {
+            webView.clearHistory();
+            webView.loadUrl("about:blank");
+            Log.e("BLACKBOX_DEBUG", "Cleared WebView");
+        }
+        
+        // Reset state variables
+        isInitialLoad = true;
+        clearHistory = true;
+        
+        Log.e("BLACKBOX_DEBUG", "About to call loadEntryContent()");
+        // Reload the content with the new article data
+        loadEntryContent();
+        Log.e("BLACKBOX_DEBUG", "After loadEntryContent(), currentId is now: " + currentId);
+        
+        // Reinitialize play mode if needed
+        if (!isReadingMode) {
+            Log.e("BLACKBOX_DEBUG", "Recreating MediaBrowser connection");
+            // Recreate the media browser connection with the new article
+            mMediaBrowserHelper = new MediaBrowserConnection(this);
+            mMediaBrowserHelper.registerCallback(new MediaBrowserListener());
+            mMediaBrowserHelper.onStart();
+        }
+        
+        // Clear the flag after a short delay to allow content to load
+        webView.postDelayed(() -> {
+            isLoadingFromNewIntent = false;
+            Log.e("BLACKBOX_DEBUG", "Cleared isLoadingFromNewIntent flag");
+        }, 1000);
+        
+        Log.e("BLACKBOX_DEBUG", "onNewIntent COMPLETED");
+    }
+
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
@@ -439,6 +509,11 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         long entryId = getIntent().getLongExtra("entry_id", -1);
         if (entryId == -1) { makeSnackbar("Error: No article ID provided."); finish(); return; }
         currentId = entryId;
+        
+        Log.e("BLACKBOX_DEBUG", "+++++++++++++++++++++++++++++++++++++++");
+        Log.e("BLACKBOX_DEBUG", "loadEntryContent CALLED");
+        Log.e("BLACKBOX_DEBUG", "Setting currentId to: " + currentId);
+        Log.e("BLACKBOX_DEBUG", "+++++++++++++++++++++++++++++++++++++++");
 
         EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
         if (entryInfo == null) { makeSnackbar("Error: Could not load article data."); finish(); return; }
@@ -446,6 +521,13 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         currentLink = entryInfo.getEntryLink();
         feedId = entryInfo.getFeedId();
         bookmark = entryInfo.getBookmark();
+        
+        // THIS IS THE FIX: Update the TtsPlaylist BEFORE the MediaBrowser connects
+        // This ensures the MediaBrowser gets the correct article ID
+        if (!isReadingMode) {
+            Log.e("BLACKBOX_DEBUG", "Updating TtsPlaylist with currentId: " + currentId);
+            ttsPlaylist.updatePlayingId(currentId);
+        }
 
         String originalHtml = entryRepository.getOriginalHtmlById(currentId);
 
@@ -524,6 +606,14 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         sharedPreferencesRepository.setCurrentReadingEntryId(currentId);
         initializePlaylistSystem();
         syncLoadingWithTts();
+        
+        // THIS IS THE FIX: Show the function buttons after loading content
+        // Previously this was done in onMetadataChanged(), but now we ignore stale metadata
+        if (!isReadingMode) {
+            Log.e("BLACKBOX_DEBUG", "Showing function buttons in loadEntryContent()");
+            functionButtons.setVisibility(View.VISIBLE);
+            functionButtons.setAlpha(1.0f);
+        }
     }
 
     private void updateToggleStateAndWebView(String originalHtml, String translatedHtml) {
@@ -1492,12 +1582,41 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         @Override
         public void onMetadataChanged(MediaMetadataCompat metadata) {
             if (metadata == null) {
+                Log.e("BLACKBOX_DEBUG", "onMetadataChanged: metadata is NULL");
                 return;
             }
+            
+            long metadataEntryId = Long.parseLong(metadata.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID));
+            long intentEntryId = getIntent().getLongExtra("entry_id", -1);
+            
+            Log.e("BLACKBOX_DEBUG", "----------------------------------------");
+            Log.e("BLACKBOX_DEBUG", "onMetadataChanged CALLED");
+            Log.e("BLACKBOX_DEBUG", "isLoadingFromNewIntent: " + isLoadingFromNewIntent);
+            Log.e("BLACKBOX_DEBUG", "Metadata entry_id: " + metadataEntryId);
+            Log.e("BLACKBOX_DEBUG", "Current currentId: " + currentId);
+            Log.e("BLACKBOX_DEBUG", "Intent entry_id: " + intentEntryId);
+            
+            // THIS IS THE CRITICAL FIX: If the metadata doesn't match the Intent, IGNORE IT
+            // This happens when the TtsService hasn't updated yet with the new article
+            if (metadataEntryId != intentEntryId) {
+                Log.e("BLACKBOX_DEBUG", "IGNORING onMetadataChanged - metadata ID (" + metadataEntryId + ") doesn't match intent ID (" + intentEntryId + ")");
+                Log.e("BLACKBOX_DEBUG", "This is stale metadata from the previous article");
+                Log.e("BLACKBOX_DEBUG", "----------------------------------------");
+                return;
+            }
+            
+            // Also ignore if we're loading from a new intent
+            if (isLoadingFromNewIntent) {
+                Log.e("BLACKBOX_DEBUG", "IGNORING onMetadataChanged because isLoadingFromNewIntent=true");
+                Log.e("BLACKBOX_DEBUG", "----------------------------------------");
+                return;
+            }
+            
+            Log.e("BLACKBOX_DEBUG", "PROCESSING onMetadataChanged - IDs match, this is valid metadata");
 
             String titleFromIntent = getIntent().getStringExtra("entry_title");
             if (titleFromIntent != null && !titleFromIntent.isEmpty() && getSupportActionBar() != null) {
-                Log.d(TAG, "onMetadataChanged: Fighting back against flicker. Resetting title to: " + titleFromIntent);
+                Log.e("BLACKBOX_DEBUG", "Setting title from intent: " + titleFromIntent);
                 getSupportActionBar().setTitle(titleFromIntent);
             }
 
@@ -1516,7 +1635,8 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             content = metadata.getString("content");
             bookmark = metadata.getString("bookmark");
             currentLink = metadata.getString("link");
-            currentId = Long.parseLong(metadata.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID));
+            // DON'T change currentId here - it's already set correctly from the Intent
+            Log.e("BLACKBOX_DEBUG", "Keeping currentId as: " + currentId);
             updateToggleTranslationVisibility();
             feedId = metadata.getLong("feedId");
 
@@ -1539,18 +1659,19 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
             if (isWebViewMode) {
                 webView.loadUrl(currentLink);
-                Log.d(TAG, "Restoring web view mode: " + currentLink);
+                Log.e("BLACKBOX_DEBUG", "Loading URL: " + currentLink);
                 browserButton.setVisible(false);
                 offlineButton.setVisible(true);
                 showOfflineButton = false;
             } else if (htmlToLoad != null) {
+                Log.e("BLACKBOX_DEBUG", "Loading HTML into WebView");
                 loadHtmlIntoWebView(htmlToLoad);
                 browserButton.setVisible(true);
                 offlineButton.setVisible(false);
                 showOfflineButton = false;
             } else {
                 webView.loadUrl(currentLink);
-                Log.d(TAG, "Fallback: loading live URL - " + currentLink);
+                Log.e("BLACKBOX_DEBUG", "Fallback: loading URL: " + currentLink);
                 browserButton.setVisible(false);
                 showOfflineButton = true;
             }
@@ -1559,6 +1680,9 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             if (ttsPlayer.isWebViewConnected()) {
                 ttsPlayer.setUiControlPlayback(true);
             }
+            
+            Log.e("BLACKBOX_DEBUG", "onMetadataChanged COMPLETED");
+            Log.e("BLACKBOX_DEBUG", "----------------------------------------");
 
         }
 

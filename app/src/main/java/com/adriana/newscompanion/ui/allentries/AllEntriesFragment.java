@@ -409,6 +409,7 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
         }
 
         Intent intent = new Intent(context, WebViewActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP); // THIS IS THE FIX - ensures onNewIntent() is called
         intent.putExtra("entry_id", entryInfo.getEntryId());
         intent.putExtra("read", false); // Assume a normal click is for reading/playing
 
@@ -429,7 +430,7 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
         intent.putExtra("entry_title", titleToPass);
         intent.putExtra("is_translated", isTranslated);
 
-        Log.d("DEBUG_TRANSLATION", "Sending to WebViewActivity from onEntryClick: is_translated = " + isTranslated);
+        Log.d("DEBUG_TRANSLATION", "Sending to WebViewActivity from onEntryClick: entry_id=" + entryInfo.getEntryId() + ", is_translated=" + isTranslated);
 
         // Update visited date and start the activity
         allEntriesViewModel.updateVisitedDate(entryInfo.getEntryId());
@@ -517,6 +518,7 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
 
         Context context = getContext();
         Intent intent = new Intent(context, WebViewActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP); // THIS IS THE FIX - ensures onNewIntent() is called
         intent.putExtra("read", false);
         intent.putExtra("entry_id", entryId);
 
@@ -565,6 +567,7 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
 
         Context context = getContext();
         Intent intent = new Intent(context, WebViewActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP); // THIS IS THE FIX - ensures onNewIntent() is called
         intent.putExtra("read", true);
         intent.putExtra("entry_id", entryId);
 

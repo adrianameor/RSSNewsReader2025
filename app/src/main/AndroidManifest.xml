@@ -29,6 +29,7 @@
             android:name=".ui.webview.WebViewActivity"
             android:parentActivityName=".ui.main.MainActivity"
             android:exported="false"
+            android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|keyboardHidden"/>
         <activity
             android:name=".ui.loginwebview.LoginWebViewActivity"
