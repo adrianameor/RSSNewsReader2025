@@ -244,15 +244,32 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             }
             loadHtmlIntoWebView(result.finalHtml, result.finalTitle);
 
+            // --- FIX FOR ISSUE 1: Ensure TTS uses correct language after translation ---
             String targetLang = sharedPreferencesRepository.getDefaultTranslationLanguage();
-            ttsExtractor.setCurrentLanguage(targetLang, true);
             String plainTextContent = textUtil.extractHtmlContent(result.finalHtml, "--####--");
             String fullContentForTts = result.finalTitle + "--####--" + plainTextContent;
 
             if (!fullContentForTts.trim().isEmpty()) {
-                Log.d(TAG, "Manual translation finished. Updating TTS player with new full content and language: " + targetLang);
-                ttsPlayer.extract(currentId, feedId, fullContentForTts, targetLang);
+                Log.d(TAG, "Manual translation finished. Updating TTS with language: " + targetLang);
+                
+                // 1. Stop any current TTS playback
+                if (ttsPlayer.isSpeaking()) {
+                    ttsPlayer.stopTtsPlayback();
+                }
+                
+                // 2. Set the language in the extractor with lock
+                ttsExtractor.setCurrentLanguage(targetLang, true);
+                
+                // 3. Extract the new content with the correct language
+                boolean extractSuccess = ttsPlayer.extract(currentId, feedId, fullContentForTts, targetLang);
+                
+                // 4. Setup TTS engine with the new language
+                if (extractSuccess) {
+                    ttsPlayer.setupTts();
+                    Log.d(TAG, "TTS reinitialized with translated content in language: " + targetLang);
+                }
             }
+            // --- END OF FIX ---
         });
 
         // This observer for error dialogs remains unchanged.
@@ -673,32 +690,69 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                     toggleTranslationButton.setTitle(isTranslatedView ? "Show Original" : "Show Translation");
                     loadHtmlIntoWebView(htmlToLoad);
 
-                    // --- THIS IS THE FIX for the wrong accent ---
+                    // --- FIX FOR ISSUE 2: Stop TTS and restart with correct content and language ---
+                    // Remember if TTS was playing before toggle
+                    boolean wasPlaying = ttsPlayer.isSpeaking();
+                    
+                    // Stop current TTS playback
+                    if (wasPlaying) {
+                        ttsPlayer.stopTtsPlayback();
+                        Log.d(TAG, "Stopped TTS before toggle");
+                    }
+                    
                     if (isTranslatedView) {
                         // When switching TO translated view...
                         String translated = entry.getTranslated();
                         if (translated != null && !translated.trim().isEmpty()) {
-                            // 1. Get the target language (e.g., "en")
+                            // 1. Get the target language
                             String lang = sharedPreferencesRepository.getDefaultTranslationLanguage();
-                            // 2. Set the TTS engine's language.
+                            Log.d(TAG, "Toggle to translated: Using language: " + lang);
+                            
+                            // 2. Set the TTS engine's language with lock
                             ttsExtractor.setCurrentLanguage(lang, true);
-                            // 3. Send the translated text to be read.
-                            ttsPlayer.extract(entry.getId(), entry.getFeedId(), translated, lang);
+                            
+                            // 3. Extract the translated text
+                            boolean extractSuccess = ttsPlayer.extract(entry.getId(), entry.getFeedId(), translated, lang);
+                            
+                            // 4. Setup TTS with the new language
+                            if (extractSuccess) {
+                                ttsPlayer.setupTts();
+                                
+                                // 5. Resume playback if it was playing before
+                                if (wasPlaying && !isReadingMode) {
+                                    ttsPlayer.speak();
+                                    Log.d(TAG, "Resumed TTS playback with translated content");
+                                }
+                            }
                         }
                     } else {
                         // When switching TO original view...
                         String original = entry.getContent();
                         if (original != null && !original.trim().isEmpty()) {
+                            // Identify the original language asynchronously
                             Disposable langDetectionDisposable = textUtil.identifyLanguageRx(original)
                                     .subscribeOn(io.reactivex.rxjava3.schedulers.Schedulers.io())
                                     .observeOn(io.reactivex.rxjava3.android.schedulers.AndroidSchedulers.mainThread())
                                     .subscribe(
                                             originalLang -> {
-                                                // 2. Now that we have the correct original language...
                                                 Log.d(TAG, "Toggle to original: Language identified as: " + originalLang);
+                                                
+                                                // 1. Set the TTS engine's language with lock
                                                 ttsExtractor.setCurrentLanguage(originalLang, true);
-                                                // 3. Send the original text to be read with the correct accent.
-                                                ttsPlayer.extract(entry.getId(), entry.getFeedId(), original, originalLang);
+                                                
+                                                // 2. Extract the original text
+                                                boolean extractSuccess = ttsPlayer.extract(entry.getId(), entry.getFeedId(), original, originalLang);
+                                                
+                                                // 3. Setup TTS with the new language
+                                                if (extractSuccess) {
+                                                    ttsPlayer.setupTts();
+                                                    
+                                                    // 4. Resume playback if it was playing before
+                                                    if (wasPlaying && !isReadingMode) {
+                                                        ttsPlayer.speak();
+                                                        Log.d(TAG, "Resumed TTS playback with original content");
+                                                    }
+                                                }
                                             },
                                             error -> {
                                                 // Fallback on error
@@ -709,6 +763,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                             compositeDisposable.add(langDetectionDisposable);
                         }
                     }
+                    // --- END OF FIX ---
 
                 } else {
                     makeSnackbar("No alternate version available.");

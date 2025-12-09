@@ -335,9 +335,16 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
     }
 
     public void setupTts() {
-        // --- THIS IS THE NEW, SIMPLIFIED, SYNCHRONOUS SETUP METHOD ---
+        // --- ENHANCED SETUP METHOD WITH BETTER LANGUAGE HANDLING ---
         Log.d(TAG, "setupTts() called.");
-        if (sentences == null || sentences.isEmpty()) {            Log.w(TAG, "No content to read in setupTts(), skipping language set.");
+        
+        if (tts == null) {
+            Log.e(TAG, "TTS engine is null in setupTts(), cannot set language.");
+            return;
+        }
+        
+        if (sentences == null || sentences.isEmpty()) {
+            Log.w(TAG, "No content to read in setupTts(), skipping language set.");
             return;
         }
 
@@ -348,17 +355,34 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
 
         try {
             Log.d(TAG, "Setting TTS language to: " + language);
-            int result = tts.setLanguage(new Locale(language));
+            
+            // Parse the language code to create a proper Locale
+            Locale targetLocale;
+            if (language.contains("-")) {
+                // Handle language codes like "en-US", "zh-CN"
+                String[] parts = language.split("-");
+                targetLocale = new Locale(parts[0], parts.length > 1 ? parts[1] : "");
+            } else {
+                // Handle simple language codes like "en", "ms", "zh"
+                targetLocale = new Locale(language);
+            }
+            
+            int result = tts.setLanguage(targetLocale);
+            
             if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                Log.e(TAG, "Language not supported by TTS engine: " + language + ". Defaulting to English.");
+                Log.e(TAG, "Language not supported by TTS engine: " + language + " (" + targetLocale.getDisplayName() + "). Defaulting to English.");
                 tts.setLanguage(Locale.ENGLISH);
+                language = "en"; // Update the stored language to reflect the fallback
+            } else {
+                Log.d(TAG, "TTS language successfully set to: " + targetLocale.getDisplayName() + " (" + language + ")");
             }
         } catch (Exception e) {
             Log.e(TAG, "Invalid locale provided to TTS engine: " + language, e);
             tts.setLanguage(Locale.ENGLISH);
+            language = "en"; // Update the stored language to reflect the fallback
         }
         // It no longer calls speak() on its own. The service is now in charge of that.
-        // --- END OF NEW METHOD ---
+        // --- END OF ENHANCED METHOD ---
     }
 
     private void identifyLanguage(String sentence, boolean fromService) {
