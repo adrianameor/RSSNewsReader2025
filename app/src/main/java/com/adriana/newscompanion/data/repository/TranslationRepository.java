@@ -17,9 +17,6 @@ public class TranslationRepository {
         this.deepSeekApiService = deepSeekApiService;
     }
 
-    /**
-     * A simple, robust method to translate a block of text (plain or HTML).
-     */
     public Single<String> translateText(String originalText, String sourceLang, String targetLang) {
         if (originalText == null || originalText.trim().isEmpty() || sourceLang.equalsIgnoreCase(targetLang)) {
             return Single.just(originalText);
@@ -40,9 +37,6 @@ public class TranslationRepository {
                 .onErrorReturnItem(originalText); // Fallback on error
     }
 
-    /**
-     * Summarizes a block of text to a specific word count.
-     */
     public Single<String> summarizeText(String originalText, int wordCount) {
         if (originalText == null || originalText.trim().isEmpty()) {
             return Single.just("");

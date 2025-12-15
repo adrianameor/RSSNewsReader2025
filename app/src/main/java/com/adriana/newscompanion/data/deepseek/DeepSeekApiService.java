@@ -27,11 +27,10 @@ public interface DeepSeekApiService {
         public List<Message> messages;
         public double temperature = 0.7;
 
-        // This single constructor now handles both plain text and HTML
         public DeepSeekRequest(String textToTranslate, String sourceLang, String targetLang, boolean isHtml) {
             String prompt;
             if (isHtml) {
-                prompt = String.format(
+                prompt = String.format(Locale.US,
                         "You are an expert HTML translator. Translate the text content within the following HTML from %s to %s. " +
                                 "Crucially, do not change any HTML tags or their attributes. Maintain the original HTML structure perfectly. " +
                                 "Only translate the human-readable text between the tags. Do not translate proper nouns or technical terms. " +
@@ -39,7 +38,7 @@ public interface DeepSeekApiService {
                         sourceLang, targetLang, textToTranslate
                 );
             } else {
-                prompt = String.format(
+                prompt = String.format(Locale.US,
                         "Translate the following text from %s to %s. Do not translate proper nouns or technical terms. Only provide the translation, with no additional explanations. Text: %s",
                         sourceLang, targetLang, textToTranslate
                 );
@@ -54,12 +53,11 @@ public interface DeepSeekApiService {
         public double temperature = 0.7;
 
         public SummarizeRequest(String textToSummarize, int wordCount) {
-            // Using Locale.US ensures that the integer wordCount is formatted correctly
-            // regardless of the user's device locale, preventing bugs with the prompt.
             String prompt = String.format(Locale.US,
-                    "Summarize the following article into a concise summary of approximately %d words. " +
-                            "Capture the key points, main arguments, and overall tone of the original text. " +
-                            "IMPORTANT: Structure the output into multiple paragraphs(2 or 3 sentences per one paragraph) for readability. Use \\n\\n to separate paragraphs. " +
+                    "You are a helpful assistant. First, identify the main language of the following article. Don't tell me the language." +
+                            "Then, summarize the article in that same language in approximately %d words. " +
+                            "Capture the key points and main arguments, and overall of the original text. " +
+                            "IMPORTANT: Structure the output into multiple paragraphs for readability. Use \\n\\n to separate paragraphs. " +
                             "Do not include any introductory phrases like \"This article discusses...\" or \"In summary...\". " +
                             "Just provide the summary text directly. Here is the article:\n\n%s",
                     wordCount, textToSummarize

@@ -124,6 +124,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     private MediaBrowserHelper mMediaBrowserHelper;
     private Set<Long> translatedArticleIds = new HashSet<>();
     private Snackbar translationSnackbar;
+    private Snackbar summarySnackbar;
 
     @Inject
     TtsPlayer ttsPlayer;
@@ -541,13 +542,33 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     }
 
     private void initializeSummarizationObservers() {
-        // New observer for summarization progress
         webViewViewModel.isSummarizing().observe(this, isSummarizing -> {
             if (isSummarizing) {
+                // --- THIS IS THE FIX ---
+                // 1. Create a persistent snackbar with the "Generating summary..." message.
+                summarySnackbar = Snackbar.make(findViewById(R.id.webView_view), "Generating summary...", Snackbar.LENGTH_INDEFINITE);
+
+                // 2. Add a "Cancel" action button that calls the ViewModel's new cancel method.
+                //    We can reuse the existing 'cancel' string resource.
+                summarySnackbar.setAction(R.string.cancel, v -> {
+                    webViewViewModel.cancelSummarization();
+                });
+
+                // 3. Show the snackbar.
+                summarySnackbar.show();
+                // --- END OF FIX ---
+
+                // Also show the visual loading bar
                 loading.setVisibility(View.VISIBLE);
                 loading.setIndeterminate(true);
-                makeSnackbar("Generating summary...");
+
             } else {
+                // When summarization is finished, cancelled, or has an error, dismiss the snackbar.
+                if (summarySnackbar != null && summarySnackbar.isShown()) {
+                    summarySnackbar.dismiss();
+                }
+
+                // Also hide the visual loading bar
                 loading.setIndeterminate(false);
                 loading.setVisibility(View.GONE);
             }
@@ -558,6 +579,11 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 if (!isSummaryView) {
                     originalHtmlForSummary = entryRepository.getOriginalHtmlById(currentId);
                 }
+
+                EntryInfo originalEntryInfo = webViewViewModel.getEntryInfoById(currentId);
+                String originalTitle = (originalEntryInfo != null) ? originalEntryInfo.getEntryTitle() : "";
+                String summaryTitle = getString(R.string.summary_prefix) + ": " + originalTitle;
+
                 String[] paragraphs = summary.split("\\n\\n");
                 StringBuilder htmlSummary = new StringBuilder();
                 for (String p : paragraphs) {
@@ -565,10 +591,10 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                         htmlSummary.append("<p>").append(p).append("</p>");
                     }
                 }
-                loadHtmlIntoWebView(htmlSummary.toString(), "Summary");
+
+                loadHtmlIntoWebView(htmlSummary.toString(), summaryTitle);
                 isSummaryView = true;
                 summarizeButton.setTitle("Show Full Article");
-
                 toggleTranslationButton.setVisible(false);
             }
         });

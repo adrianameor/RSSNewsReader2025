@@ -373,7 +373,6 @@ public class WebViewViewModel extends ViewModel {
             return;
         }
 
-        // --- FIX #1: Use the correct, existing method to get plain text ---
         String plainContent = textUtil.extractHtmlContent(entry.getHtml(), " ");
         if (plainContent == null || plainContent.trim().isEmpty()) {
             _snackbarMessage.setValue("Could not extract text to summarize.");
@@ -392,12 +391,17 @@ public class WebViewViewModel extends ViewModel {
                             isSummarizing.setValue(false);
                         },
                         error -> {
-                            // --- FIX #2 & #3: Use the correct MutableLiveData object ---
                             _translationError.setValue("Failed to generate summary: " + error.getMessage());
                             isSummarizing.setValue(false);
                         }
                 );
 
         summarizationDisposable.add(disposable);
+    }
+
+    public void cancelSummarization() {
+        summarizationDisposable.clear();
+        isSummarizing.postValue(false);
+        _snackbarMessage.postValue("Summarization cancelled.");
     }
 }

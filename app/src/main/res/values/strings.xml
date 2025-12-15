@@ -26,6 +26,7 @@
     <string name="ai_summarization_summary_on">AI will generate a summary for articles.</string>
     <string name="ai_summarization_summary_off">AI summarization is disabled.</string>
     <string name="ai_summary_length_title">Summary Length</string>
+    <string name="summary_prefix">Summary</string>
 
     <string name="jobPeriodic_title">Update interval</string>
     <string name="confidence_threshold_title">Confidence threshold (%)</string>
