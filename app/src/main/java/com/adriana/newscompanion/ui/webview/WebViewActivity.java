@@ -553,19 +553,22 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             }
         });
 
-        // New observer for the final summary result
         webViewViewModel.getSummaryResult().observe(this, summary -> {
             if (summary != null && !summary.isEmpty()) {
                 if (!isSummaryView) {
-                    // If we are not currently in summary view, save the original HTML
                     originalHtmlForSummary = entryRepository.getOriginalHtmlById(currentId);
                 }
-                loadHtmlIntoWebView(summary, "Summary"); // Load summary into WebView
+                String[] paragraphs = summary.split("\\n\\n");
+                StringBuilder htmlSummary = new StringBuilder();
+                for (String p : paragraphs) {
+                    if (!p.trim().isEmpty()) {
+                        htmlSummary.append("<p>").append(p).append("</p>");
+                    }
+                }
+                loadHtmlIntoWebView(htmlSummary.toString(), "Summary");
                 isSummaryView = true;
                 summarizeButton.setTitle("Show Full Article");
 
-                // When showing summary, hide translation/toggle buttons as they apply to full text
-                translationButton.setVisible(false);
                 toggleTranslationButton.setVisible(false);
             }
         });

@@ -1,6 +1,7 @@
 package com.adriana.newscompanion.data.deepseek;
 
 import java.util.List;
+import java.util.Locale;
 
 import io.reactivex.rxjava3.core.Single;
 import retrofit2.http.Body;
@@ -53,11 +54,14 @@ public interface DeepSeekApiService {
         public double temperature = 0.7;
 
         public SummarizeRequest(String textToSummarize, int wordCount) {
-            String prompt = String.format(
+            // Using Locale.US ensures that the integer wordCount is formatted correctly
+            // regardless of the user's device locale, preventing bugs with the prompt.
+            String prompt = String.format(Locale.US,
                     "Summarize the following article into a concise summary of approximately %d words. " +
                             "Capture the key points, main arguments, and overall tone of the original text. " +
+                            "IMPORTANT: Structure the output into multiple paragraphs(2 or 3 sentences per one paragraph) for readability. Use \\n\\n to separate paragraphs. " +
                             "Do not include any introductory phrases like \"This article discusses...\" or \"In summary...\". " +
-                            "Just provide the summary directly. Here is the article:\n\n%s",
+                            "Just provide the summary text directly. Here is the article:\n\n%s",
                     wordCount, textToSummarize
             );
             this.messages = List.of(new Message("user", prompt));
