@@ -216,4 +216,16 @@ public class Entry {
     public void setTranslatedSummary(@Nullable String translatedSummary) {
         this.translatedSummary = translatedSummary;
     }
+
+    @Nullable
+    @ColumnInfo(name = "summary")
+    private String summary;
+
+    public String getSummary() {
+        return summary;
+    }
+
+    public void setSummary(@Nullable String summary) {
+        this.summary = summary;
+    }
 }

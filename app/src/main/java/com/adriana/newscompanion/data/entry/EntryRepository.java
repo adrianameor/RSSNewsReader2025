@@ -413,7 +413,10 @@ public class EntryRepository {
         entryDao.updateTranslatedSummary(translatedSummary, id);
     }
 
-    // In EntryRepository.java
+    public void updateSummary(String summary, long id) {
+        entryDao.updateSummary(summary, id);
+    }
+
     public List<Long> getArticleIdsByFeedId(long feedId, int limit) {
         return entryDao.getArticleIdsByFeedId(feedId, limit);
     }

@@ -364,9 +364,18 @@ public class WebViewViewModel extends ViewModel {
     }
 
     public void summarizeArticle(long entryId) {
+        Entry entry = entryRepository.getEntryById(entryId);
+
+        // 1. Check if a summary already exists in the database.
+        if (entry != null && entry.getSummary() != null && !entry.getSummary().isEmpty()) {
+            // If it exists, use the cached summary and skip the API call.
+            summaryResult.setValue(entry.getSummary());
+            android.util.Log.d("WebViewViewModel", "Used cached summary for entry ID: " + entryId);
+            return;
+        }
+
         isSummarizing.setValue(true);
 
-        Entry entry = entryRepository.getEntryById(entryId);
         if (entry == null || entry.getHtml() == null || entry.getHtml().trim().isEmpty()) {
             _snackbarMessage.setValue("Article content not available for summary.");
             isSummarizing.setValue(false);
@@ -387,6 +396,9 @@ public class WebViewViewModel extends ViewModel {
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(
                         summary -> {
+                            // 2. After getting the summary, save it to the database.
+                            entryRepository.updateSummary(summary, entryId);
+
                             summaryResult.setValue(summary);
                             isSummarizing.setValue(false);
                         },

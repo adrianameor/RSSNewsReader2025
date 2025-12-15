@@ -20,9 +20,8 @@ import com.adriana.newscompanion.data.playlist.PlaylistDao;
 import javax.inject.Inject;
 import javax.inject.Provider;
 
-@Database(entities = {Feed.class, Entry.class, Playlist.class, History.class}, version = 7)
+@Database(entities = {Feed.class, Entry.class, Playlist.class, History.class}, version = 8)
 @androidx.room.TypeConverters({TypeConverters.class})
-// make this abstract to let room do the implementation
 public abstract class AppDatabase extends RoomDatabase {
 
     public abstract FeedDao feedDao();
@@ -81,7 +80,6 @@ public abstract class AppDatabase extends RoomDatabase {
         }
     };
 
-    // FIX: Instructions to build the 'target_translation_language' room.
     public static final Migration MIGRATION_5_6 = new Migration(5, 6) {
         @Override
         public void migrate(@NonNull SupportSQLiteDatabase database) {
@@ -94,7 +92,6 @@ public abstract class AppDatabase extends RoomDatabase {
         }
     };
 
-    // THIS IS THE FIX: Instructions to build the 'translated_title' and 'translated_summary' rooms.
     public static final Migration MIGRATION_6_7 = new Migration(6, 7) {
         @Override
         public void migrate(@NonNull SupportSQLiteDatabase database) {
@@ -105,6 +102,13 @@ public abstract class AppDatabase extends RoomDatabase {
             } catch (Exception e) {
                 Log.e("DatabaseMigration", "Migration v6 to v7 failed: " + e.getMessage());
             }
+        }
+    };
+
+    public static final Migration MIGRATION_7_8 = new Migration(7, 8) {
+        @Override
+        public void migrate(@NonNull SupportSQLiteDatabase database) {
+            database.execSQL("ALTER TABLE entry_table ADD COLUMN summary TEXT");
         }
     };
 
@@ -121,9 +125,6 @@ public abstract class AppDatabase extends RoomDatabase {
         @Override
         public void onCreate(@NonNull SupportSQLiteDatabase db) {
             super.onCreate(db);
-
-            // since db is not instantiated at this stage (db will only be created after build()), dagger will create an instance to run this
-//            FeedDao feedDao = database.get().feedDao();
         }
     }
 }

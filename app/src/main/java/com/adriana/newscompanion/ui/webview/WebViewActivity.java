@@ -544,31 +544,22 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     private void initializeSummarizationObservers() {
         webViewViewModel.isSummarizing().observe(this, isSummarizing -> {
             if (isSummarizing) {
-                // --- THIS IS THE FIX ---
-                // 1. Create a persistent snackbar with the "Generating summary..." message.
                 summarySnackbar = Snackbar.make(findViewById(R.id.webView_view), "Generating summary...", Snackbar.LENGTH_INDEFINITE);
 
-                // 2. Add a "Cancel" action button that calls the ViewModel's new cancel method.
-                //    We can reuse the existing 'cancel' string resource.
                 summarySnackbar.setAction(R.string.cancel, v -> {
                     webViewViewModel.cancelSummarization();
                 });
 
-                // 3. Show the snackbar.
                 summarySnackbar.show();
-                // --- END OF FIX ---
 
-                // Also show the visual loading bar
                 loading.setVisibility(View.VISIBLE);
                 loading.setIndeterminate(true);
 
             } else {
-                // When summarization is finished, cancelled, or has an error, dismiss the snackbar.
                 if (summarySnackbar != null && summarySnackbar.isShown()) {
                     summarySnackbar.dismiss();
                 }
 
-                // Also hide the visual loading bar
                 loading.setIndeterminate(false);
                 loading.setVisibility(View.GONE);
             }
@@ -596,6 +587,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 isSummaryView = true;
                 summarizeButton.setTitle("Show Full Article");
                 toggleTranslationButton.setVisible(false);
+                browserButton.setVisible(false);
             }
         });
     }
@@ -611,6 +603,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 // Restore visibility of translation buttons
                 translationButton.setVisible(true);
                 updateToggleTranslationVisibility();
+                browserButton.setVisible(true);
             }
         } else {
             // Otherwise, trigger the summarization process
