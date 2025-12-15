@@ -219,7 +219,7 @@ public class MainActivity extends AppCompatActivity {
                             serializer.startTag(null, "body");
                             serializer.startTag(null, "setting");
                             serializer.attribute(null, "jobPeriodic", Integer.toString(sharedPreferencesRepository.getJobPeriodic()));
-                            serializer.attribute(null, "displaySummary", sharedPreferencesRepository.getDisplaySummary() ? "true" : "false");
+                            serializer.attribute(null, "displaySummary", sharedPreferencesRepository.isSummarizationEnabled() ? "true" : "false");
                             serializer.attribute(null, "highlightText", sharedPreferencesRepository.getHighlightText() ? "true" : "false");
                             serializer.attribute(null, "textZoom", Integer.toString(sharedPreferencesRepository.getTextZoom()));
                             serializer.attribute(null, "sortBy", sharedPreferencesRepository.getSortBy());

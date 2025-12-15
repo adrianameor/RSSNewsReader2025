@@ -39,8 +39,8 @@ public class SharedPreferencesRepository {
         getEditor().putBoolean("night", isNight).commit();
     }
 
-    public boolean getDisplaySummary() {
-        return sharedPreferences.getBoolean("displaySummary", true);
+    public boolean isSummarizationEnabled() {
+        return sharedPreferences.getBoolean("displaySummary", false);
     }
 
     public void setDisplaySummary(boolean displaySummary) {
@@ -189,11 +189,7 @@ public class SharedPreferencesRepository {
         return sharedPreferences.getLong("current_reading_entry_id", -1);
     }
 
-    public boolean isAiSummarizationEnabled() {
-        return sharedPreferences.getBoolean("ai_summarization_enabled", false);
-    }
     public int getAiSummaryLength() {
-        // The "200" is a default value if the preference is not set for some reason.
-        return Integer.parseInt(sharedPreferences.getString("ai_summary_length", "200"));
+        return sharedPreferences.getInt("ai_summary_length", 200);
     }
 }

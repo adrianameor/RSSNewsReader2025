@@ -46,6 +46,18 @@
             app:summaryOn="@string/display_summary_on"
             app:title="@string/display_summary_title" />
 
+        <SeekBarPreference
+            android:max="500"
+            app:defaultValue="200"
+            app:dependency="displaySummary"
+            app:icon="@drawable/ic_summary"
+            app:key="ai_summary_length"
+            app:min="100"
+            app:seekBarIncrement="50"
+            app:showSeekBarValue="true"
+            app:summary="@string/ai_summary_length_summary"
+            app:title="@string/ai_summary_length_title" />
+
         <SwitchPreferenceCompat
             app:defaultValue="true"
             app:icon="@drawable/ic_marker"
@@ -53,30 +65,6 @@
             app:summaryOff="@string/highlight_text_off"
             app:summaryOn="@string/highlight_text_on"
             app:title="@string/highlight_text_title" />
-
-    </PreferenceCategory>
-
-    <PreferenceCategory
-        android:layout="@layout/text_preference_category"
-        app:title="@string/ai_features_header">
-
-        <SwitchPreferenceCompat
-            app:defaultValue="false"
-            app:icon="@drawable/ic_summary"
-            app:key="ai_summarization_enabled"
-            app:summaryOff="@string/ai_summarization_summary_off"
-            app:summaryOn="@string/ai_summarization_summary_on"
-            app:title="@string/ai_summarization_title" />
-
-        <ListPreference
-            app:defaultValue="200"
-            app:dependency="ai_summarization_enabled"
-            app:entries="@array/summary_length"
-            app:entryValues="@array/summary_length_values"
-            app:icon="@drawable/ic_summary"
-            app:key="ai_summary_length"
-            app:title="@string/ai_summary_length_title"
-            app:useSimpleSummaryProvider="true" />
 
     </PreferenceCategory>
 

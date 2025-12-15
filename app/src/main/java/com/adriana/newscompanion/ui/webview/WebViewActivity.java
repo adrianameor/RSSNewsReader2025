@@ -533,7 +533,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         }
 
         // --- ADD THIS BLOCK to show/hide the summarize button ---
-        if (sharedPreferencesRepository.isAiSummarizationEnabled()) {
+        if (sharedPreferencesRepository.isSummarizationEnabled()) {
             summarizeButton.setVisible(true);
         } else {
             summarizeButton.setVisible(false);

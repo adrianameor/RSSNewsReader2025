@@ -20,6 +20,7 @@
     <string name="language_identifier_header">Language Identifier</string>
     <string name="text_to_speech_header">Text-to-Speech</string>
     <string name="sync_header">Sync</string>
+    <string name="ai_summary_length_summary">Set the approximate word count for AI summaries.</string>
     <string name="ai_features_header">AI Features</string>
     <string name="ai_summarization_title">Enable AI Summarization</string>
     <string name="ai_summarization_summary_on">AI will generate a summary for articles.</string>
@@ -153,7 +154,7 @@
     <string name="help_buttons_desc">To learn about the functionalities of the icon buttons, simply long-press the button to view the description.</string>
 
     <!-- Feed -->
-    <string name="rss_search_link">Search RSS feeds by keywords using this link:\nhttps://rssfinder.app/</string>
+    <string name="rss_search_link">Search RSS feeds by keywords using this link:\nhttps://rss.app/</string>
     <string name="empty_feed">No feed found</string>
     <string name="delete_feed_message">Delete feed?</string>
     <string name="delete_feed_confirmation">Are you sure to delete this feed? All the articles under this feed will be deleted too.</string>
