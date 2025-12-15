@@ -65,8 +65,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 
-
-
 import javax.inject.Inject;
 
 import dagger.hilt.android.AndroidEntryPoint;
@@ -77,7 +75,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     private final static String TAG = "WebViewActivity";
     private LiveData<Entry> autoTranslationObserver;
     private Observer<Entry> checkAutoTranslated;
-    // Share
     private ActivityWebviewBinding binding;
     private WebViewViewModel webViewViewModel;
     private WebView webView;
@@ -89,6 +86,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     private MenuItem translationButton;
     private MenuItem highlightTextButton;
     private MenuItem backgroundMusicButton;
+    private MenuItem summarizeButton;
     private String currentLink;
     private long currentId;
     private long feedId;
@@ -100,23 +98,22 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     private boolean showOfflineButton;
     private boolean clearHistory;
     private boolean isInitialLoad = true;
+    private boolean isSummaryView = false;
+    private String originalHtmlForSummary; // To store content when showing a summary
 
     private MenuItem toggleTranslationButton;
     private boolean isTranslatedView = true;
     private MaterialToolbar toolbar;
 
-    // Translation
     private String targetLanguage;
     private String translationMethod;
     private TextUtil textUtil;
     private CompositeDisposable compositeDisposable;
     private LiveData<Entry> liveEntryObserver;
 
-    // Reading Mode
     private MenuItem switchPlayModeButton;
     private LinearLayout functionButtonsReadingMode;
 
-    // Playing Mode
     private MenuItem switchReadModeButton;
     private MaterialButton playPauseButton;
     private MaterialButton skipNextButton;
@@ -145,10 +142,10 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
     @Inject
     TranslationRepository translationRepository;
-    @Inject  // ADD THIS LINE
-    PlaylistRepository playlistRepository;  // ADD THIS FIELD
+    @Inject
+    PlaylistRepository playlistRepository;
 
-    private boolean isLoadingFromNewIntent = false; // Flag to prevent MediaBrowser interference
+    private boolean isLoadingFromNewIntent = false;
     
     @Override
     protected void onNewIntent(Intent intent) {
@@ -157,75 +154,41 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         long newEntryId = intent.getLongExtra("entry_id", -1);
         String newEntryTitle = intent.getStringExtra("entry_title");
         boolean isFromSkipAction = intent.getBooleanExtra("from_skip", false);
-        
-        Log.e("BLACKBOX_DEBUG", "========================================");
-        Log.e("BLACKBOX_DEBUG", "onNewIntent CALLED");
-        Log.e("BLACKBOX_DEBUG", "New entry_id: " + newEntryId);
-        Log.e("BLACKBOX_DEBUG", "New entry_title: " + newEntryTitle);
-        Log.e("BLACKBOX_DEBUG", "isFromSkipAction: " + isFromSkipAction);
-        Log.e("BLACKBOX_DEBUG", "Old currentId: " + currentId);
-        Log.e("BLACKBOX_DEBUG", "isReadingMode: " + isReadingMode);
-        Log.e("BLACKBOX_DEBUG", "========================================");
-        
-        // Set flag to prevent MediaBrowser from interfering
+
         isLoadingFromNewIntent = true;
-        
-        // Update the activity's intent to the new one
+
         setIntent(intent);
-        
-        // If this is from a skip action, DON'T stop the MediaBrowser or TTS
-        // The TtsService is already handling the playback
+
         if (!isFromSkipAction) {
-            // Stop any ongoing TTS playback from the previous article
             if (ttsPlayer != null && ttsPlayer.isSpeaking()) {
                 ttsPlayer.stopTtsPlayback();
-                Log.e("BLACKBOX_DEBUG", "Stopped TTS playback");
             }
-            
-            // Stop media browser if in play mode
+
             if (!isReadingMode && mMediaBrowserHelper != null) {
-                Log.e("BLACKBOX_DEBUG", "Stopping MediaBrowser");
                 mMediaBrowserHelper.getTransportControls().stop();
                 mMediaBrowserHelper.onStop();
             }
-        } else {
-            Log.e("BLACKBOX_DEBUG", "Skip action detected - keeping MediaBrowser and TTS running");
         }
-        
-        // Clear the WebView to prepare for new content
+
         if (webView != null) {
             webView.clearHistory();
             webView.loadUrl("about:blank");
-            Log.e("BLACKBOX_DEBUG", "Cleared WebView");
         }
-        
-        // Reset state variables
+
         isInitialLoad = true;
         clearHistory = true;
-        
-        Log.e("BLACKBOX_DEBUG", "About to call loadEntryContent()");
-        // Reload the content with the new article data
+
         loadEntryContent();
-        Log.e("BLACKBOX_DEBUG", "After loadEntryContent(), currentId is now: " + currentId);
-        
-        // Only reinitialize MediaBrowser if NOT from skip action
+
         if (!isReadingMode && !isFromSkipAction) {
-            Log.e("BLACKBOX_DEBUG", "Recreating MediaBrowser connection");
-            // Recreate the media browser connection with the new article
             mMediaBrowserHelper = new MediaBrowserConnection(this);
             mMediaBrowserHelper.registerCallback(new MediaBrowserListener());
             mMediaBrowserHelper.onStart();
-        } else if (isFromSkipAction) {
-            Log.e("BLACKBOX_DEBUG", "Skipping MediaBrowser recreation - using existing connection");
         }
-        
-        // Clear the flag after a short delay to allow content to load
+
         webView.postDelayed(() -> {
             isLoadingFromNewIntent = false;
-            Log.e("BLACKBOX_DEBUG", "Cleared isLoadingFromNewIntent flag");
         }, 1000);
-        
-        Log.e("BLACKBOX_DEBUG", "onNewIntent COMPLETED");
     }
 
     @Override
@@ -267,8 +230,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             String selectedValue = entryValues[which].toString();
             sharedPreferencesRepository.setDefaultTranslationLanguage(selectedValue);
             targetLanguage = selectedValue;
-            // translate();
-            // This triggers the new translation logic after a language is selected from the dialog
             handleOtherToolbarItems(R.id.translate);
             dialog.dismiss();
         });
@@ -277,39 +238,29 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     }
 
     private void initializeTranslationObservers() {
-        // This observer now handles the new persistent Snackbar with a Cancel button.
         webViewViewModel.isTranslating().observe(this, isTranslating -> {
             if (isTranslating) {
-                // --- THIS IS THE FIX ---
-                // 1. Create a persistent snackbar with the "Translating..." message.
                 translationSnackbar = Snackbar.make(findViewById(R.id.webView_view), "Translating... please wait", Snackbar.LENGTH_INDEFINITE);
 
-                // 2. Add a "Cancel" action button that calls the ViewModel's cancel method.
                 translationSnackbar.setAction("Cancel", v -> {
                     webViewViewModel.cancelTranslation();
                 });
 
-                // 3. Show the snackbar.
                 translationSnackbar.show();
-                // --- END OF FIX ---
 
-                // Also show the visual loading bar
                 loading.setVisibility(View.VISIBLE);
                 loading.setIndeterminate(true);
 
             } else {
-                // When translation is finished, cancelled, or has an error, dismiss the snackbar.
                 if (translationSnackbar != null && translationSnackbar.isShown()) {
                     translationSnackbar.dismiss();
                 }
 
-                // Also hide the visual loading bar
                 loading.setIndeterminate(false);
                 loading.setVisibility(View.GONE);
             }
         });
 
-        // This observer for the final result remains unchanged.
         webViewViewModel.getTranslationResult().observe(this, result -> {
             if (result == null) return;
 
@@ -324,35 +275,28 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             }
             loadHtmlIntoWebView(result.finalHtml, result.finalTitle);
 
-            // --- FIX FOR ISSUE 1: Ensure TTS uses correct language after translation ---
             String targetLang = sharedPreferencesRepository.getDefaultTranslationLanguage();
             String plainTextContent = textUtil.extractHtmlContent(result.finalHtml, "--####--");
             String fullContentForTts = result.finalTitle + "--####--" + plainTextContent;
 
             if (!fullContentForTts.trim().isEmpty()) {
                 Log.d(TAG, "Manual translation finished. Updating TTS with language: " + targetLang);
-                
-                // 1. Stop any current TTS playback
+
                 if (ttsPlayer.isSpeaking()) {
                     ttsPlayer.stopTtsPlayback();
                 }
-                
-                // 2. Set the language in the extractor with lock
+
                 ttsExtractor.setCurrentLanguage(targetLang, true);
-                
-                // 3. Extract the new content with the correct language
+
                 boolean extractSuccess = ttsPlayer.extract(currentId, feedId, fullContentForTts, targetLang);
-                
-                // 4. Setup TTS engine with the new language
+
                 if (extractSuccess) {
                     ttsPlayer.setupTts();
                     Log.d(TAG, "TTS reinitialized with translated content in language: " + targetLang);
                 }
             }
-            // --- END OF FIX ---
         });
 
-        // This observer for error dialogs remains unchanged.
         webViewViewModel.getTranslationError().observe(this, error -> {
             if (error != null && !error.isEmpty()) {
                 new AlertDialog.Builder(this)
@@ -363,7 +307,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             }
         });
 
-        // This observer for simple status messages remains unchanged.
         webViewViewModel.getSnackbarMessage().observe(this, message -> {
             if (message != null && !message.isEmpty()) {
                 makeSnackbar(message);
@@ -380,17 +323,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
         webViewViewModel = new ViewModelProvider(this).get(WebViewViewModel.class);
         initializeTranslationObservers();
-
-        /*webViewViewModel.getTranslatedTextReady().observe(this, translatedText -> {
-            if (!isReadingMode && isTranslatedView && translatedText != null && !translatedText.trim().isEmpty()) {
-                Log.d(TAG, "TTS triggered after LiveData translation update");
-
-                String lang = getLanguageForCurrentView(currentId, isTranslatedView, "en");
-
-                ttsPlayer.extract(currentId, feedId, translatedText, lang);
-                Log.d(TAG, "LiveData.observe fired, isTranslatedView = " + isTranslatedView);
-            }
-        });*/
+        initializeSummarizationObservers();
 
         isReadingMode = getIntent().getBooleanExtra("read", false);
 
@@ -459,6 +392,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         backgroundMusicButton = toolbar.getMenu().findItem(R.id.toggleBackgroundMusic);
         switchReadModeButton = toolbar.getMenu().findItem(R.id.switchReadMode);
         switchPlayModeButton = toolbar.getMenu().findItem(R.id.switchPlayMode);
+        summarizeButton = toolbar.getMenu().findItem(R.id.summarize);
 
         toggleTranslationButton.setVisible(false);
 
@@ -469,28 +403,22 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     }
 
     private void loadHtmlIntoWebView(String html) {
-        // THIS IS THE FIX for the "Loading title..." bug.
         EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
         String titleToDisplay;
 
         if (entryInfo != null) {
             if (isTranslatedView) {
-                // If we want the translated view, try to get the translated title first.
                 titleToDisplay = entryInfo.getTranslatedTitle();
-                // If it's not ready, gracefully fall back to the original title.
                 if (titleToDisplay == null || titleToDisplay.isEmpty()) {
                     titleToDisplay = entryInfo.getEntryTitle();
                 }
             } else {
-                // Otherwise, we are in the original view, so just use the original title.
                 titleToDisplay = entryInfo.getEntryTitle();
             }
         } else {
-            // Ultimate fallback if entryInfo itself is null
             titleToDisplay = "Title not available";
         }
 
-        // Now, call the other method that does the real work, passing the correct title.
         loadHtmlIntoWebView(html, titleToDisplay);
     }
 
@@ -519,11 +447,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         long entryId = getIntent().getLongExtra("entry_id", -1);
         if (entryId == -1) { makeSnackbar("Error: No article ID provided."); finish(); return; }
         currentId = entryId;
-        
-        Log.e("BLACKBOX_DEBUG", "+++++++++++++++++++++++++++++++++++++++");
-        Log.e("BLACKBOX_DEBUG", "loadEntryContent CALLED");
-        Log.e("BLACKBOX_DEBUG", "Setting currentId to: " + currentId);
-        Log.e("BLACKBOX_DEBUG", "+++++++++++++++++++++++++++++++++++++++");
 
         EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
         if (entryInfo == null) { makeSnackbar("Error: Could not load article data."); finish(); return; }
@@ -531,17 +454,13 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         currentLink = entryInfo.getEntryLink();
         feedId = entryInfo.getFeedId();
         bookmark = entryInfo.getBookmark();
-        
-        // THIS IS THE FIX: Update the TtsPlaylist BEFORE the MediaBrowser connects
-        // This ensures the MediaBrowser gets the correct article ID
+
         if (!isReadingMode) {
-            Log.e("BLACKBOX_DEBUG", "Updating TtsPlaylist with currentId: " + currentId);
             ttsPlaylist.updatePlayingId(currentId);
         }
 
         String originalHtml = entryRepository.getOriginalHtmlById(currentId);
 
-        // This handles the RED CIRCLE case.
         if (originalHtml == null || originalHtml.trim().isEmpty()) {
             Log.d(TAG, "No offline content found for entry " + currentId + ". Loading URL directly.");
             if (currentLink != null && !currentLink.isEmpty()) {
@@ -560,15 +479,10 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             return;
         }
 
-        // --- THIS IS THE FIX ---
-        // For the initial load, the instruction from the Intent (from the article list)
-        // is ALWAYS the highest priority. We ignore any old saved state.
         boolean isStartingInTranslatedViewFromIntent = getIntent().getBooleanExtra("is_translated", false);
         isTranslatedView = isStartingInTranslatedViewFromIntent;
 
-        // We can still save this new state, so it's remembered if the user toggles it later.
         sharedPreferencesRepository.setIsTranslatedView(currentId, isTranslatedView);
-        // --- END OF FIX ---
 
         String htmlToLoad;
         String titleToDisplay;
@@ -576,21 +490,17 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         String langForTts;
         boolean translationExists = entryInfo.getHtml() != null && !entryInfo.getHtml().equals(originalHtml);
 
-        // --- THIS IS THE FIX ---
-        // We go back to the simpler logic. We trust that the 'content' and 'translated'
-        // fields from the database are already correctly formatted by the extractor.
         if (isTranslatedView && translationExists) {
             htmlToLoad = entryInfo.getHtml();
             titleToDisplay = entryInfo.getTranslatedTitle();
-            contentForTts = entryInfo.getTranslated(); // This field should contain "Title--####--Body"
+            contentForTts = entryInfo.getTranslated();
             langForTts = sharedPreferencesRepository.getDefaultTranslationLanguage();
         } else {
             htmlToLoad = originalHtml;
             titleToDisplay = entryInfo.getEntryTitle();
-            contentForTts = entryInfo.getContent(); // This field should contain "Title--####--Body"
+            contentForTts = entryInfo.getContent();
             langForTts = entryInfo.getFeedLanguage();
         }
-        // --- END OF FIX ---
 
         loadHtmlIntoWebView(htmlToLoad, titleToDisplay);
 
@@ -607,7 +517,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         }
 
         if (langForTts == null || langForTts.trim().isEmpty()) {
-            langForTts = "en"; // Safe fallback
+            langForTts = "en";
         }
         if (contentForTts != null && !contentForTts.trim().isEmpty()) {
             ttsPlayer.extract(currentId, feedId, contentForTts, langForTts);
@@ -616,14 +526,68 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         sharedPreferencesRepository.setCurrentReadingEntryId(currentId);
         initializePlaylistSystem();
         syncLoadingWithTts();
-        
-        // THIS IS THE FIX: Show the function buttons after loading content
-        // Previously this was done in onMetadataChanged(), but now we ignore stale metadata
+
         if (!isReadingMode) {
-            Log.e("BLACKBOX_DEBUG", "Showing function buttons in loadEntryContent()");
             functionButtons.setVisibility(View.VISIBLE);
             functionButtons.setAlpha(1.0f);
         }
+
+        // --- ADD THIS BLOCK to show/hide the summarize button ---
+        if (sharedPreferencesRepository.isAiSummarizationEnabled()) {
+            summarizeButton.setVisible(true);
+        } else {
+            summarizeButton.setVisible(false);
+        }
+    }
+
+    private void initializeSummarizationObservers() {
+        // New observer for summarization progress
+        webViewViewModel.isSummarizing().observe(this, isSummarizing -> {
+            if (isSummarizing) {
+                loading.setVisibility(View.VISIBLE);
+                loading.setIndeterminate(true);
+                makeSnackbar("Generating summary...");
+            } else {
+                loading.setIndeterminate(false);
+                loading.setVisibility(View.GONE);
+            }
+        });
+
+        // New observer for the final summary result
+        webViewViewModel.getSummaryResult().observe(this, summary -> {
+            if (summary != null && !summary.isEmpty()) {
+                if (!isSummaryView) {
+                    // If we are not currently in summary view, save the original HTML
+                    originalHtmlForSummary = entryRepository.getOriginalHtmlById(currentId);
+                }
+                loadHtmlIntoWebView(summary, "Summary"); // Load summary into WebView
+                isSummaryView = true;
+                summarizeButton.setTitle("Show Full Article");
+
+                // When showing summary, hide translation/toggle buttons as they apply to full text
+                translationButton.setVisible(false);
+                toggleTranslationButton.setVisible(false);
+            }
+        });
+    }
+
+    private boolean handleSummarizeClick() {
+        if (isSummaryView) {
+            // If we are currently showing a summary, switch back to the full article
+            if (originalHtmlForSummary != null) {
+                loadHtmlIntoWebView(originalHtmlForSummary);
+                isSummaryView = false;
+                summarizeButton.setTitle("Summarize");
+
+                // Restore visibility of translation buttons
+                translationButton.setVisible(true);
+                updateToggleTranslationVisibility();
+            }
+        } else {
+            // Otherwise, trigger the summarization process
+            webViewViewModel.summarizeArticle(currentId);
+        }
+        return true;
     }
 
     private void updateToggleStateAndWebView(String originalHtml, String translatedHtml) {
@@ -685,8 +649,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     }
 
     private void loadHtmlIntoWebView(String html, String title) {
-        // THIS IS THE FIX: This method now accepts the correct title as an argument
-        // and uses it when rebuilding the header, instead of fetching the wrong one.
         Document doc = Jsoup.parse(html);
         doc.head().append(webViewViewModel.getStyle());
 
@@ -694,7 +656,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         if (entryInfo != null && !doc.html().contains("class=\"entry-header\"")) {
             doc.selectFirst("body").prepend(
                     webViewViewModel.getHtml(
-                            title, // Use the correct title passed into this method
+                            title,
                             entryInfo.getFeedTitle(),
                             entryInfo.getEntryPublishedDate(),
                             entryInfo.getFeedImageUrl()
@@ -716,11 +678,10 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     private boolean handleOtherToolbarItems(int itemId) {
         switch (itemId) {
 
+            case R.id.summarize:
+                return handleSummarizeClick();
+
             case R.id.translate:
-                // --- THIS IS THE FIX ---
-                // The Activity no longer does the translation. It just tells the ViewModel to start.
-                // The ViewModel will handle the progress bar and results via LiveData,
-                // which the Activity is already observing in initializeTranslationObservers().
                 webViewViewModel.translateArticle(currentId);
                 return true;
 
@@ -790,35 +751,26 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                     toggleTranslationButton.setTitle(isTranslatedView ? "Show Original" : "Show Translation");
                     loadHtmlIntoWebView(htmlToLoad);
 
-                    // --- FIX FOR ISSUE 2: Stop TTS and restart with correct content and language ---
-                    // Remember if TTS was playing before toggle
                     boolean wasPlaying = ttsPlayer.isSpeaking();
-                    
-                    // Stop current TTS playback
+
                     if (wasPlaying) {
                         ttsPlayer.stopTtsPlayback();
                         Log.d(TAG, "Stopped TTS before toggle");
                     }
                     
                     if (isTranslatedView) {
-                        // When switching TO translated view...
                         String translated = entry.getTranslated();
                         if (translated != null && !translated.trim().isEmpty()) {
-                            // 1. Get the target language
                             String lang = sharedPreferencesRepository.getDefaultTranslationLanguage();
                             Log.d(TAG, "Toggle to translated: Using language: " + lang);
-                            
-                            // 2. Set the TTS engine's language with lock
+
                             ttsExtractor.setCurrentLanguage(lang, true);
-                            
-                            // 3. Extract the translated text
+
                             boolean extractSuccess = ttsPlayer.extract(entry.getId(), entry.getFeedId(), translated, lang);
-                            
-                            // 4. Setup TTS with the new language
+
                             if (extractSuccess) {
                                 ttsPlayer.setupTts();
-                                
-                                // 5. Resume playback if it was playing before
+
                                 if (wasPlaying && !isReadingMode) {
                                     ttsPlayer.speak();
                                     Log.d(TAG, "Resumed TTS playback with translated content");
@@ -826,28 +778,22 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                             }
                         }
                     } else {
-                        // When switching TO original view...
                         String original = entry.getContent();
                         if (original != null && !original.trim().isEmpty()) {
-                            // Identify the original language asynchronously
                             Disposable langDetectionDisposable = textUtil.identifyLanguageRx(original)
                                     .subscribeOn(io.reactivex.rxjava3.schedulers.Schedulers.io())
                                     .observeOn(io.reactivex.rxjava3.android.schedulers.AndroidSchedulers.mainThread())
                                     .subscribe(
                                             originalLang -> {
                                                 Log.d(TAG, "Toggle to original: Language identified as: " + originalLang);
-                                                
-                                                // 1. Set the TTS engine's language with lock
+
                                                 ttsExtractor.setCurrentLanguage(originalLang, true);
-                                                
-                                                // 2. Extract the original text
+
                                                 boolean extractSuccess = ttsPlayer.extract(entry.getId(), entry.getFeedId(), original, originalLang);
-                                                
-                                                // 3. Setup TTS with the new language
+
                                                 if (extractSuccess) {
                                                     ttsPlayer.setupTts();
-                                                    
-                                                    // 4. Resume playback if it was playing before
+
                                                     if (wasPlaying && !isReadingMode) {
                                                         ttsPlayer.speak();
                                                         Log.d(TAG, "Resumed TTS playback with original content");
@@ -855,7 +801,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                                                 }
                                             },
                                             error -> {
-                                                // Fallback on error
                                                 Log.e(TAG, "Could not re-identify original language", error);
                                                 makeSnackbar("Could not identify language.");
                                             }
@@ -863,7 +808,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                             compositeDisposable.add(langDetectionDisposable);
                         }
                     }
-                    // --- END OF FIX ---
 
                 } else {
                     makeSnackbar("No alternate version available.");
@@ -1031,11 +975,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             }
             @Override
             public void onReceivedTitle(WebView view, String title) {
-                // THIS IS THE FIX: We override this method to do nothing.
-                // This stops the WebView from ever changing our Activity's title,
-                // solving the "flicker" bug permanently.
                 Log.d(TAG, "WebChromeClient: onReceivedTitle called with '" + title + "'. IGNORING IT.");
-                // Intentionally do not call super.onReceivedTitle(view, title);
             }
         });
     }
@@ -1092,7 +1032,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     private void switchReadMode() {
         functionButtonsReadingMode.setVisibility(View.VISIBLE);
 
-        // Load and set the playlist for navigation in reading mode
         String playlistIdString = playlistRepository.getLatestPlaylist();
         List<Long> playlistIds = new ArrayList<>();
         if (playlistIdString != null && !playlistIdString.isEmpty()) {
@@ -1231,17 +1170,14 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     public void highlightText(String searchText) {
         if (!isReadingMode && sharedPreferencesRepository.getHighlightText()) {
             String text = searchText.trim();
-            // 1. Log the raw text received from the TTS player
             Log.d("HIGHLIGHT_DEBUG", "Raw searchText from TTS: \'" + searchText + "\'");
 
-            // 2. Normalize whitespace (multiple spaces/newlines to single space) as you suggested
             text = text.replaceAll("\\s+", " ");
 
             if (webViewViewModel.endsWithBreak(text)) {
                 text = text.substring(0, text.length() - 1);
             }
 
-            // 4. Log the final, cleaned text that we will ask the WebView to find
             Log.d("HIGHLIGHT_DEBUG", "Normalized text to search: \'" + text + "\'");
             final String finalText = text.trim();
 
@@ -1251,7 +1187,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                     webView.findAllAsync(finalText);
                 });
             }
-            // --- END OF YOUR DEBUGGING CODE ---
         }
     }
 
@@ -1435,10 +1370,8 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
 
-            // Get the up-to-date title from the intent, which was sent by the previous screen.
             String titleFromIntent = getIntent().getStringExtra("entry_title");
 
-            // Use a fallback to the original title if the intent extra is missing for any reason.
             String titleToDisplay = titleFromIntent;
             if (titleToDisplay == null || titleToDisplay.isEmpty()) {
                 EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
@@ -1447,8 +1380,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 }
             }
 
-            // Set the title on the toolbar. This happens after the page is fully loaded,
-            // preventing it from being overwritten.
             if (getSupportActionBar() != null && titleToDisplay != null) {
                 Log.d(TAG, "onPageFinished (WebClient): Setting final toolbar title to: '" + titleToDisplay + "'");
                 getSupportActionBar().setTitle(titleToDisplay);
@@ -1502,10 +1433,8 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
 
-            // Get the up-to-date title from the intent, which was sent by the previous screen.
             String titleFromIntent = getIntent().getStringExtra("entry_title");
 
-            // Use a fallback to the original title if the intent extra is missing for any reason.
             String titleToDisplay = titleFromIntent;
             if (titleToDisplay == null || titleToDisplay.isEmpty()) {
                 EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
@@ -1514,8 +1443,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 }
             }
 
-            // Set the title on the toolbar. This happens after the page is fully loaded,
-            // preventing it from being overwritten.
             if (getSupportActionBar() != null && titleToDisplay != null) {
                 Log.d(TAG, "onPageFinished (ReadingWebClient): Setting final toolbar title to: '" + titleToDisplay + "'");
                 getSupportActionBar().setTitle(titleToDisplay);
@@ -1538,10 +1465,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     }
 
     private class MediaBrowserConnection extends MediaBrowserHelper {
-        // --- THIS IS PART OF THE FIX ---
-        // Add a flag to track if preparation has already been requested for this connection.
         private boolean isPreparationRequested = false;
-        // ---
 
         private MediaBrowserConnection(Context context) {
             super(context, TtsService.class);
@@ -1554,25 +1478,18 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             final MediaControllerCompat mediaController = getMediaController();
             if (mediaController != null) {
 
-                // --- THIS IS THE FIX ---
-                // Add a guard to break the infinite loop. This block will now only run ONCE.
                 if (isPreparationRequested) {
-                    Log.e("LIFECYCLE_DEBUG", "onChildrenLoaded: Preparation already requested, ignoring subsequent call to prevent loop.");
-                    return; // Do nothing on the second (and all subsequent) calls.
+                    return;
                 }
-                isPreparationRequested = true; // Set the flag so this only runs once.
-                // --- END OF FIX ---
+                isPreparationRequested = true;
 
-                // This logic is now safe because it will only execute one time.
                 String entryIdString = String.valueOf(getIntent().getLongExtra("entry_id", -1));
                 if (!"-1".equals(entryIdString)) {
-                    Log.e("LIFECYCLE_DEBUG", "--- Client is connected. Sending onPrepareFromMediaId command for ID: " + entryIdString + " ---");
                     mediaController.getTransportControls().prepareFromMediaId(entryIdString, null);
                 } else {
                     Log.e("LIFECYCLE_DEBUG", "Client connected but entryId is invalid.");
                 }
 
-                // We can still set these callbacks here.
                 ttsPlayer.setWebViewCallback(WebViewActivity.this);
                 ttsPlayer.setWebViewConnected(true);
             } else {
@@ -1592,41 +1509,22 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         @Override
         public void onMetadataChanged(MediaMetadataCompat metadata) {
             if (metadata == null) {
-                Log.e("BLACKBOX_DEBUG", "onMetadataChanged: metadata is NULL");
                 return;
             }
             
             long metadataEntryId = Long.parseLong(metadata.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID));
             long intentEntryId = getIntent().getLongExtra("entry_id", -1);
-            
-            Log.e("BLACKBOX_DEBUG", "----------------------------------------");
-            Log.e("BLACKBOX_DEBUG", "onMetadataChanged CALLED");
-            Log.e("BLACKBOX_DEBUG", "isLoadingFromNewIntent: " + isLoadingFromNewIntent);
-            Log.e("BLACKBOX_DEBUG", "Metadata entry_id: " + metadataEntryId);
-            Log.e("BLACKBOX_DEBUG", "Current currentId: " + currentId);
-            Log.e("BLACKBOX_DEBUG", "Intent entry_id: " + intentEntryId);
-            
-            // THIS IS THE CRITICAL FIX: If the metadata doesn't match the Intent, IGNORE IT
-            // This happens when the TtsService hasn't updated yet with the new article
+
             if (metadataEntryId != intentEntryId) {
-                Log.e("BLACKBOX_DEBUG", "IGNORING onMetadataChanged - metadata ID (" + metadataEntryId + ") doesn't match intent ID (" + intentEntryId + ")");
-                Log.e("BLACKBOX_DEBUG", "This is stale metadata from the previous article");
-                Log.e("BLACKBOX_DEBUG", "----------------------------------------");
                 return;
             }
-            
-            // Also ignore if we're loading from a new intent
+
             if (isLoadingFromNewIntent) {
-                Log.e("BLACKBOX_DEBUG", "IGNORING onMetadataChanged because isLoadingFromNewIntent=true");
-                Log.e("BLACKBOX_DEBUG", "----------------------------------------");
                 return;
             }
-            
-            Log.e("BLACKBOX_DEBUG", "PROCESSING onMetadataChanged - IDs match, this is valid metadata");
 
             String titleFromIntent = getIntent().getStringExtra("entry_title");
             if (titleFromIntent != null && !titleFromIntent.isEmpty() && getSupportActionBar() != null) {
-                Log.e("BLACKBOX_DEBUG", "Setting title from intent: " + titleFromIntent);
                 getSupportActionBar().setTitle(titleFromIntent);
             }
 
@@ -1645,8 +1543,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             content = metadata.getString("content");
             bookmark = metadata.getString("bookmark");
             currentLink = metadata.getString("link");
-            // DON'T change currentId here - it's already set correctly from the Intent
-            Log.e("BLACKBOX_DEBUG", "Keeping currentId as: " + currentId);
             updateToggleTranslationVisibility();
             feedId = metadata.getLong("feedId");
 
@@ -1669,19 +1565,16 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
             if (isWebViewMode) {
                 webView.loadUrl(currentLink);
-                Log.e("BLACKBOX_DEBUG", "Loading URL: " + currentLink);
                 browserButton.setVisible(false);
                 offlineButton.setVisible(true);
                 showOfflineButton = false;
             } else if (htmlToLoad != null) {
-                Log.e("BLACKBOX_DEBUG", "Loading HTML into WebView");
                 loadHtmlIntoWebView(htmlToLoad);
                 browserButton.setVisible(true);
                 offlineButton.setVisible(false);
                 showOfflineButton = false;
             } else {
                 webView.loadUrl(currentLink);
-                Log.e("BLACKBOX_DEBUG", "Fallback: loading URL: " + currentLink);
                 browserButton.setVisible(false);
                 showOfflineButton = true;
             }
@@ -1690,9 +1583,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             if (ttsPlayer.isWebViewConnected()) {
                 ttsPlayer.setUiControlPlayback(true);
             }
-            
-            Log.e("BLACKBOX_DEBUG", "onMetadataChanged COMPLETED");
-            Log.e("BLACKBOX_DEBUG", "----------------------------------------");
 
         }
 
@@ -1707,13 +1597,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         playPauseButton.setIcon(ContextCompat.getDrawable(this, iconRes));
     }
 
-
-
-
-
-
-
-    // Add to WebViewActivity.onCreate() or loadEntryContent():
     private void initializePlaylistSystem() {
         long currentId = getIntent().getLongExtra("entry_id", -1);
         if (currentId != -1) {
@@ -1725,44 +1608,35 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     }
 
     private void createOrUpdatePlaylist(long currentEntryId, long feedId) {
-        // Check if we need a new playlist
         Date latestPlaylistDate = playlistRepository.getLatestPlaylistCreatedDate();
         boolean needsNewPlaylist = latestPlaylistDate == null ||
                 System.currentTimeMillis() - latestPlaylistDate.getTime() > 3600000; // 1 hour
 
         if (needsNewPlaylist) {
-            // Create intelligent playlist
             List<Long> playlistIds = new ArrayList<>();
 
-            // 1. Current feed articles (30%)
             List<Long> feedArticles = entryRepository.getArticleIdsByFeedId(feedId, 15);
             playlistIds.addAll(feedArticles);
 
-            // 2. Recently read articles (30%)
             List<Long> recentRead = entryRepository.getRecentlyReadIds(15);
             playlistIds.addAll(recentRead);
 
-            // 3. Bookmarked articles (20%)
             List<Long> bookmarked = entryRepository.getBookmarkedIds(10);
             playlistIds.addAll(bookmarked);
 
-            // 4. Random articles (20%)
             List<Long> random = entryRepository.getRandomArticleIds(10);
             playlistIds.addAll(random);
 
-            // Ensure current article is included
             if (!playlistIds.contains(currentEntryId)) {
-                playlistIds.add(0, currentEntryId); // Add at beginning
+                playlistIds.add(0, currentEntryId);
             }
 
-            // Remove duplicates, limit size
             Set<Long> uniqueIds = new LinkedHashSet<>(playlistIds);
             List<Long> finalList = new ArrayList<>(uniqueIds);
             if (finalList.size() > 50) {
                 finalList = finalList.subList(0, 50);
             }
 
-            // Save
             String playlistString = TextUtils.join(",", finalList);
             Playlist playlist = new Playlist(new Date(), playlistString);
             playlist.setPlaylist(playlistString);

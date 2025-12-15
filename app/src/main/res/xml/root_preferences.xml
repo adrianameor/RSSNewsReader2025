@@ -58,12 +58,36 @@
 
     <PreferenceCategory
         android:layout="@layout/text_preference_category"
+        app:title="@string/ai_features_header">
+
+        <SwitchPreferenceCompat
+            app:defaultValue="false"
+            app:icon="@drawable/ic_summary"
+            app:key="ai_summarization_enabled"
+            app:summaryOff="@string/ai_summarization_summary_off"
+            app:summaryOn="@string/ai_summarization_summary_on"
+            app:title="@string/ai_summarization_title" />
+
+        <ListPreference
+            app:defaultValue="200"
+            app:dependency="ai_summarization_enabled"
+            app:entries="@array/summary_length"
+            app:entryValues="@array/summary_length_values"
+            app:icon="@drawable/ic_summary"
+            app:key="ai_summary_length"
+            app:title="@string/ai_summary_length_title"
+            app:useSimpleSummaryProvider="true" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:layout="@layout/text_preference_category"
         app:title="@string/translation_header">
         
         <ListPreference
             app:entries="@array/defaultTranslationLanguage"
             app:entryValues="@array/defaultTranslationLanguage_values"
-            app:icon="@drawable/ic_baseline_language_24"
+            app:icon="@drawable/ic_language"
             app:key="defaultTranslationLanguage"
             app:title="@string/translationLanguage_title"
             app:useSimpleSummaryProvider="true" />

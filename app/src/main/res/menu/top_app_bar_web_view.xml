@@ -1,11 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
-    9<item
+    <item
         android:id="@+id/translate"
         android:icon="@drawable/ic_language"
         android:title="Translate"
         android:contentDescription="Translate"
+        app:showAsAction="always" />
+
+    <item
+        android:id="@+id/summarize"
+        android:icon="@drawable/ic_summary"
+        android:title="Summarize"
+        android:contentDescription="Summarize Article"
+        android:visible="false"
         app:showAsAction="always" />
 
     <item
@@ -78,7 +86,7 @@
 
     <item
         android:id="@+id/switchPlayMode"
-        android:icon="@drawable/ic_play"
+        android.icon="@drawable/ic_play"
         android:title="@string/playing_mode"
         android:contentDescription="@string/playing_mode"
         android:visible="false"

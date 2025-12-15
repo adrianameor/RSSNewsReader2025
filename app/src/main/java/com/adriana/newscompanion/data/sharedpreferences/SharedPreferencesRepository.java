@@ -15,12 +15,9 @@ public class SharedPreferencesRepository {
         sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context);
     }
 
-    // --- HELPER METHOD FOR SAFE, SYNCHRONOUS EDITING ---
     private SharedPreferences.Editor getEditor() {
         return sharedPreferences.edit();
     }
-
-    // --- ALL SETTER METHODS NOW USE THE SAFE, SYNCHRONOUS .commit() ---
 
     public int getJobPeriodic() {
         return Integer.parseInt(sharedPreferences.getString("jobPeriodic", "0"));
@@ -190,5 +187,13 @@ public class SharedPreferencesRepository {
 
     public long getCurrentReadingEntryId() {
         return sharedPreferences.getLong("current_reading_entry_id", -1);
+    }
+
+    public boolean isAiSummarizationEnabled() {
+        return sharedPreferences.getBoolean("ai_summarization_enabled", false);
+    }
+    public int getAiSummaryLength() {
+        // The "200" is a default value if the preference is not set for some reason.
+        return Integer.parseInt(sharedPreferences.getString("ai_summary_length", "200"));
     }
 }

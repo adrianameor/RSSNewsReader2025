@@ -20,6 +20,11 @@
     <string name="language_identifier_header">Language Identifier</string>
     <string name="text_to_speech_header">Text-to-Speech</string>
     <string name="sync_header">Sync</string>
+    <string name="ai_features_header">AI Features</string>
+    <string name="ai_summarization_title">Enable AI Summarization</string>
+    <string name="ai_summarization_summary_on">AI will generate a summary for articles.</string>
+    <string name="ai_summarization_summary_off">AI summarization is disabled.</string>
+    <string name="ai_summary_length_title">Summary Length</string>
 
     <string name="jobPeriodic_title">Update interval</string>
     <string name="confidence_threshold_title">Confidence threshold (%)</string>

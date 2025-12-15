@@ -44,6 +44,18 @@
         <item>lineByLine</item>
     </string-array>
 
+    <string-array name="summary_length">
+        <item>Short (approx. 100 words)</item>
+        <item>Medium (approx. 250 words)</item>
+        <item>Long (approx. 500 words)</item>
+    </string-array>
+
+    <string-array name="summary_length_values">
+        <item>100</item>
+        <item>250</item>
+        <item>500</item>
+    </string-array>
+
     <!-- Default Translate Language Preference -->
     <!-- https://developers.google.com/ml-kit/language/translation/translation-language-support-->
     <string-array name="defaultTranslationLanguage">

@@ -15,6 +15,12 @@ public interface DeepSeekApiService {
             @Body DeepSeekRequest request
     );
 
+    @POST("v1/chat/completions")
+    Single<DeepSeekResponse> summarize(
+            @Header("Authorization") String apiKey,
+            @Body SummarizeRequest request
+    );
+
     class DeepSeekRequest {
         public String model = "deepseek-coder";
         public List<Message> messages;
@@ -37,6 +43,23 @@ public interface DeepSeekApiService {
                         sourceLang, targetLang, textToTranslate
                 );
             }
+            this.messages = List.of(new Message("user", prompt));
+        }
+    }
+
+    class SummarizeRequest {
+        public String model = "deepseek-coder";
+        public List<Message> messages;
+        public double temperature = 0.7;
+
+        public SummarizeRequest(String textToSummarize, int wordCount) {
+            String prompt = String.format(
+                    "Summarize the following article into a concise summary of approximately %d words. " +
+                            "Capture the key points, main arguments, and overall tone of the original text. " +
+                            "Do not include any introductory phrases like \"This article discusses...\" or \"In summary...\". " +
+                            "Just provide the summary directly. Here is the article:\n\n%s",
+                    wordCount, textToSummarize
+            );
             this.messages = List.of(new Message("user", prompt));
         }
     }

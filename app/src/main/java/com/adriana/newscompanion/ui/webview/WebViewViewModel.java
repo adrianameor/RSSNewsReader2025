@@ -37,12 +37,23 @@ public class WebViewViewModel extends ViewModel {
     private final SharedPreferencesRepository sharedPreferencesRepository;
     private final TextUtil textUtil;
     private final CompositeDisposable disposables = new CompositeDisposable();
+    private CompositeDisposable summarizationDisposable = new CompositeDisposable();
     private final MutableLiveData<String> originalHtmlLiveData = new MutableLiveData<>();
     private final MutableLiveData<String> translatedHtmlLiveData = new MutableLiveData<>();
     private final MutableLiveData<String> translatedTextReady = new MutableLiveData<>();
     private final MutableLiveData<Boolean> loadingState = new MutableLiveData<>();
     private final MutableLiveData<Long> entryIdTrigger = new MutableLiveData<>();
     private final MutableLiveData<Boolean> _isTranslating = new MutableLiveData<>(false);
+    private final MutableLiveData<Boolean> isSummarizing = new MutableLiveData<>(false);
+    private final MutableLiveData<String> summaryResult = new MutableLiveData<>();
+
+    public LiveData<Boolean> isSummarizing() {
+        return isSummarizing;
+    }
+
+    public LiveData<String> getSummaryResult() {
+        return summaryResult;
+    }
     public LiveData<Boolean> isTranslating() {
         return _isTranslating;
     }
@@ -83,11 +94,11 @@ public class WebViewViewModel extends ViewModel {
         this.textUtil = textUtil;
     }
 
-    // Clean up the subscriptions when the ViewModel is no longer needed to prevent memory leaks.
     @Override
     protected void onCleared() {
         super.onCleared();
         disposables.clear();
+        summarizationDisposable.clear();
     }
 
     public void resetEntry(long id) {
@@ -221,11 +232,10 @@ public class WebViewViewModel extends ViewModel {
             translatedTextReady.postValue(text);
         }
     }
-    // Helper method to post a snackbar message from the ViewModel
     public void clearSnackbar() {
         _snackbarMessage.setValue(null);
     }
-    // This is the new, correct implementation that translates HTML chunks to preserve formatting.
+
     public void translateArticle(long entryId) {
         final String originalHtml = entryRepository.getOriginalHtmlById(entryId);
         if (originalHtml == null || originalHtml.trim().isEmpty()) {
@@ -233,7 +243,6 @@ public class WebViewViewModel extends ViewModel {
             return;
         }
 
-        // We still need a plain text sample for language detection.
         String plainContentForDetection = textUtil.extractHtmlContent(originalHtml, "--####--");
         if (plainContentForDetection == null || plainContentForDetection.trim().isEmpty()) {
             _translationError.setValue("Could not extract content to identify language.");
@@ -268,16 +277,12 @@ public class WebViewViewModel extends ViewModel {
 
                             Single<String> titleJob = textUtil.translateText(sourceLang, targetLang, originalTitle);
 
-                            // --- THIS IS THE FIX ---
-                            // We now call a robust method that translates HTML chunks, not plain text.
                             Single<String> bodyJob = translateHtmlBodyRobustly(originalHtml, sourceLang, targetLang, entryId);
-                            // --- END OF FIX ---
 
                             disposables.add(Single.zip(
                                             titleJob,
                                             bodyJob,
                                             (translatedTitle, translatedBodyHtml) -> {
-                                                // Background work
                                                 entryRepository.updateTranslatedTitle(translatedTitle, entryId);
                                                 entryRepository.updateHtml(translatedBodyHtml, entryId);
                                                 String translatedBodyText = textUtil.extractHtmlContent(translatedBodyHtml, "--####--");
@@ -304,7 +309,6 @@ public class WebViewViewModel extends ViewModel {
         );
     }
 
-    // This is the corrected helper method with the proper method signatures.
     private Single<String> translateHtmlBodyRobustly(String originalHtml, String sourceLang, String targetLang, long entryId) {
         return Single.create(emitter -> {            final CompositeDisposable innerDisposables = new CompositeDisposable();
             emitter.setDisposable(innerDisposables);
@@ -312,7 +316,6 @@ public class WebViewViewModel extends ViewModel {
             try {
                 Document doc = Jsoup.parse(originalHtml);
                 List<Element> elementsToTranslate = new ArrayList<>();
-                // Select all major block elements that contain text.
                 for (Element element : doc.select("p, h2, h3, h4, h5, h6, li, blockquote, figcaption, td, th")) {
                     if (!element.text().trim().isEmpty()) {
                         elementsToTranslate.add(element);
@@ -320,8 +323,6 @@ public class WebViewViewModel extends ViewModel {
                 }
 
                 if (elementsToTranslate.isEmpty()) {
-                    // Fallback for articles with no standard block tags.
-                    // THIS IS THE FIX: Use the correct parameter order.
                     Disposable fallbackDisposable = textUtil.translateHtml(sourceLang, targetLang, doc.body().html(), progress -> {})
                             .onErrorReturnItem(originalHtml)
                             .subscribe(emitter::onSuccess, emitter::onError);
@@ -333,9 +334,8 @@ public class WebViewViewModel extends ViewModel {
                 for (Element element : elementsToTranslate) {
                     final String originalChunkHtml = element.html();
                     translationSingles.add(
-                            // THIS IS THE FIX: Use the correct parameter order.
                             textUtil.translateHtml(sourceLang, targetLang, originalChunkHtml, progress -> {})
-                                    .onErrorReturn(error -> originalChunkHtml) // On error, use the original HTML chunk
+                                    .onErrorReturn(error -> originalChunkHtml)
                                     .subscribeOn(Schedulers.io())
                     );
                 }
@@ -344,7 +344,7 @@ public class WebViewViewModel extends ViewModel {
                             for (int i = 0; i < translatedChunks.length; i++) {
                                 elementsToTranslate.get(i).html((String) translatedChunks[i]);
                             }
-                            return doc.html(); // Return the re-assembled, full HTML document
+                            return doc.html();
                         })
                         .subscribe(
                                 emitter::onSuccess,
@@ -358,11 +358,46 @@ public class WebViewViewModel extends ViewModel {
         });
     }
     public void cancelTranslation() {
-        // This interrupts and cancels all ongoing RxJava jobs added to this CompositeDisposable.
         disposables.clear();
-        // Set the translating state back to false to hide the progress bar.
         _isTranslating.postValue(false);
-        // Post a message to the UI to confirm cancellation.
         _snackbarMessage.postValue("Translation cancelled.");
+    }
+
+    public void summarizeArticle(long entryId) {
+        isSummarizing.setValue(true);
+
+        Entry entry = entryRepository.getEntryById(entryId);
+        if (entry == null || entry.getHtml() == null || entry.getHtml().trim().isEmpty()) {
+            _snackbarMessage.setValue("Article content not available for summary.");
+            isSummarizing.setValue(false);
+            return;
+        }
+
+        // --- FIX #1: Use the correct, existing method to get plain text ---
+        String plainContent = textUtil.extractHtmlContent(entry.getHtml(), " ");
+        if (plainContent == null || plainContent.trim().isEmpty()) {
+            _snackbarMessage.setValue("Could not extract text to summarize.");
+            isSummarizing.setValue(false);
+            return;
+        }
+
+        int summaryLength = sharedPreferencesRepository.getAiSummaryLength();
+
+        Disposable disposable = translationRepository.summarizeText(plainContent, summaryLength)
+                .subscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(
+                        summary -> {
+                            summaryResult.setValue(summary);
+                            isSummarizing.setValue(false);
+                        },
+                        error -> {
+                            // --- FIX #2 & #3: Use the correct MutableLiveData object ---
+                            _translationError.setValue("Failed to generate summary: " + error.getMessage());
+                            isSummarizing.setValue(false);
+                        }
+                );
+
+        summarizationDisposable.add(disposable);
     }
 }

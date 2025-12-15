@@ -39,4 +39,25 @@ public class TranslationRepository {
                 })
                 .onErrorReturnItem(originalText); // Fallback on error
     }
+
+    /**
+     * Summarizes a block of text to a specific word count.
+     */
+    public Single<String> summarizeText(String originalText, int wordCount) {
+        if (originalText == null || originalText.trim().isEmpty()) {
+            return Single.just("");
+        }
+
+        DeepSeekApiService.SummarizeRequest request = new DeepSeekApiService.SummarizeRequest(originalText, wordCount);
+
+        return deepSeekApiService.summarize("Bearer " + DEEPSEEK_API_KEY, request)
+                .map(response -> {
+                    if (response != null && response.choices != null && !response.choices.isEmpty()) {
+                        String summary = response.choices.get(0).message.content;
+                        return summary != null ? summary.trim() : "";
+                    }
+                    return ""; // Fallback to empty string on failure
+                })
+                .onErrorReturnItem("Error: Could not generate summary."); // Fallback on error
+    }
 }
