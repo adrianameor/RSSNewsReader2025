@@ -156,11 +156,13 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         
         long newEntryId = intent.getLongExtra("entry_id", -1);
         String newEntryTitle = intent.getStringExtra("entry_title");
+        boolean isFromSkipAction = intent.getBooleanExtra("from_skip", false);
         
         Log.e("BLACKBOX_DEBUG", "========================================");
         Log.e("BLACKBOX_DEBUG", "onNewIntent CALLED");
         Log.e("BLACKBOX_DEBUG", "New entry_id: " + newEntryId);
         Log.e("BLACKBOX_DEBUG", "New entry_title: " + newEntryTitle);
+        Log.e("BLACKBOX_DEBUG", "isFromSkipAction: " + isFromSkipAction);
         Log.e("BLACKBOX_DEBUG", "Old currentId: " + currentId);
         Log.e("BLACKBOX_DEBUG", "isReadingMode: " + isReadingMode);
         Log.e("BLACKBOX_DEBUG", "========================================");
@@ -171,17 +173,23 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         // Update the activity's intent to the new one
         setIntent(intent);
         
-        // Stop any ongoing TTS playback from the previous article
-        if (ttsPlayer != null && ttsPlayer.isSpeaking()) {
-            ttsPlayer.stopTtsPlayback();
-            Log.e("BLACKBOX_DEBUG", "Stopped TTS playback");
-        }
-        
-        // Stop media browser if in play mode
-        if (!isReadingMode && mMediaBrowserHelper != null) {
-            Log.e("BLACKBOX_DEBUG", "Stopping MediaBrowser");
-            mMediaBrowserHelper.getTransportControls().stop();
-            mMediaBrowserHelper.onStop();
+        // If this is from a skip action, DON'T stop the MediaBrowser or TTS
+        // The TtsService is already handling the playback
+        if (!isFromSkipAction) {
+            // Stop any ongoing TTS playback from the previous article
+            if (ttsPlayer != null && ttsPlayer.isSpeaking()) {
+                ttsPlayer.stopTtsPlayback();
+                Log.e("BLACKBOX_DEBUG", "Stopped TTS playback");
+            }
+            
+            // Stop media browser if in play mode
+            if (!isReadingMode && mMediaBrowserHelper != null) {
+                Log.e("BLACKBOX_DEBUG", "Stopping MediaBrowser");
+                mMediaBrowserHelper.getTransportControls().stop();
+                mMediaBrowserHelper.onStop();
+            }
+        } else {
+            Log.e("BLACKBOX_DEBUG", "Skip action detected - keeping MediaBrowser and TTS running");
         }
         
         // Clear the WebView to prepare for new content
@@ -200,13 +208,15 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         loadEntryContent();
         Log.e("BLACKBOX_DEBUG", "After loadEntryContent(), currentId is now: " + currentId);
         
-        // Reinitialize play mode if needed
-        if (!isReadingMode) {
+        // Only reinitialize MediaBrowser if NOT from skip action
+        if (!isReadingMode && !isFromSkipAction) {
             Log.e("BLACKBOX_DEBUG", "Recreating MediaBrowser connection");
             // Recreate the media browser connection with the new article
             mMediaBrowserHelper = new MediaBrowserConnection(this);
             mMediaBrowserHelper.registerCallback(new MediaBrowserListener());
             mMediaBrowserHelper.onStart();
+        } else if (isFromSkipAction) {
+            Log.e("BLACKBOX_DEBUG", "Skipping MediaBrowser recreation - using existing connection");
         }
         
         // Clear the flag after a short delay to allow content to load

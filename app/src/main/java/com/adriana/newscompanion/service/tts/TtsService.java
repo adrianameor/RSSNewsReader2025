@@ -288,11 +288,13 @@ public class TtsService extends MediaBrowserServiceCompat {
             if (ttsPlaylist.skipNext()) {
                 // 3. If successful, call our NEW, lightweight helper method.
                 prepareAndPlayCurrentTrack();
+                
+                // 4. Notify WebViewActivity to update its UI
+                notifyWebViewActivityOfArticleChange();
             } else {
                 Log.w(TAG, "Cannot skip next: at the end of the playlist.");
                 updatePlaybackState(PlaybackStateCompat.STATE_STOPPED);
             }
-            // --- END OF FIX ---
         }
 
         @Override
@@ -307,9 +309,35 @@ public class TtsService extends MediaBrowserServiceCompat {
 
             if (ttsPlaylist.skipPrevious()) {
                 prepareAndPlayCurrentTrack();
+                
+                // Notify WebViewActivity to update its UI
+                notifyWebViewActivityOfArticleChange();
             } else {
                 Log.w(TAG, "Cannot skip previous: at the start of the playlist.");
                 updatePlaybackState(PlaybackStateCompat.STATE_STOPPED);
+            }
+        }
+        
+        /**
+         * Notifies the WebViewActivity to update its UI when the article changes.
+         * This sends a new Intent with FLAG_ACTIVITY_SINGLE_TOP to trigger onNewIntent().
+         */
+        private void notifyWebViewActivityOfArticleChange() {
+            long newEntryId = ttsPlaylist.getPlayingId();
+            EntryInfo entryInfo = entryRepository.getEntryInfoById(newEntryId);
+            
+            if (entryInfo != null) {
+                Intent intent = new Intent(TtsService.this, com.adriana.newscompanion.ui.webview.WebViewActivity.class);
+                intent.putExtra("entry_id", newEntryId);
+                intent.putExtra("entry_title", entryInfo.getEntryTitle());
+                intent.putExtra("read", false); // Play mode
+                intent.putExtra("from_skip", true); // Mark this as coming from skip action
+                intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+                
+                Log.d(TAG, "Sending Intent to WebViewActivity for article: " + newEntryId + " (from skip action)");
+                startActivity(intent);
+            } else {
+                Log.e(TAG, "Could not find EntryInfo for ID: " + newEntryId);
             }
         }
 

@@ -33,6 +33,7 @@ import io.reactivex.rxjava3.core.Flowable;
 import io.reactivex.rxjava3.disposables.Disposable;
 import io.reactivex.rxjava3.schedulers.Schedulers;
 import com.adriana.newscompanion.service.util.TextUtil;
+import com.adriana.newscompanion.service.util.LanguageUtil;
 import io.reactivex.rxjava3.disposables.CompositeDisposable;
 import android.os.Handler;
 import android.os.Looper;
@@ -157,9 +158,21 @@ public class FeedRepository {
     }
 
     public void addNewFeed(RssFeed feed) {
-        // --- THIS IS THE NEW, SMARTER LOGIC BASED ON YOUR EXCELLENT SUGGESTION ---
+        // --- THIS IS THE IMPROVED LOGIC: USE RSS LANGUAGE FIRST, THEN AUTO-DETECT ---
+        
+        // PRIORITY 1: Check if the RSS feed already contains a language tag
+        String rssLanguage = feed.getLanguage();
+        if (rssLanguage != null && !rssLanguage.trim().isEmpty() && !rssLanguage.equalsIgnoreCase("und")) {
+            // RSS feed has a language specified - use it directly!
+            Log.d(TAG, "Using language from RSS feed: " + rssLanguage + " for feed: " + feed.getLink());
+            saveFeedAndEntries(feed, rssLanguage);
+            return;
+        }
+        
+        Log.d(TAG, "No valid language in RSS feed, attempting automatic detection for: " + feed.getLink());
 
-        // 1. Get a CLEANER sample of text by using titles and paragraph text.
+        // PRIORITY 2: If RSS doesn't have language, try automatic detection
+        // Get a CLEANER sample of text by using titles and paragraph text.
         StringBuilder sampleText = new StringBuilder();
         for (int i = 0; i < Math.min(5, feed.getRssItems().size()); i++) { // Look at first 5 items
             RssItem item = feed.getRssItems().get(i);
@@ -180,21 +193,21 @@ public class FeedRepository {
 
         // If there's no clean text to analyze, we fall back to a safe default.
         if (sampleText.toString().trim().isEmpty()) {
-            Log.w(TAG, "No clean sample text found for language ID. Saving with default 'en'.");
+            Log.w(TAG, "No clean sample text found for language detection. Saving with default 'en'.");
             saveFeedAndEntries(feed, "en");
             return;
         }
 
-        // 2. Run the automatic detection on the much cleaner sample text.
+        // Run the automatic detection on the much cleaner sample text.
         Disposable languageDetectionDisposable = textUtil.identifyLanguageRx(sampleText.toString())
                 .subscribeOn(Schedulers.io())
                 .observeOn(Schedulers.io())
                 .subscribe(
                         identifiedLanguage -> {
-                            // 3. After detection, check if the result is valid and useful.
+                            // After detection, check if the result is valid and useful.
                             if (identifiedLanguage != null && !identifiedLanguage.equalsIgnoreCase("und") && !identifiedLanguage.trim().isEmpty()) {
                                 // If it is, use the detected language.
-                                Log.d(TAG, "Proactively identified language for feed '" + feed.getLink() + "' as: " + identifiedLanguage);
+                                Log.d(TAG, "Auto-detected language for feed '" + feed.getLink() + "' as: " + identifiedLanguage);
                                 saveFeedAndEntries(feed, identifiedLanguage);
                             } else {
                                 // If the result is "und" or null, it's a failure. Fall back to the safe default.
@@ -203,8 +216,8 @@ public class FeedRepository {
                             }
                         },
                         error -> {
-                            // 4. On any other error, also fall back to a safe default.
-                            Log.e(TAG, "Proactive language ID failed for feed " + feed.getLink() + ". Defaulting to 'en'.", error);
+                            // PRIORITY 3: On any error, fall back to English
+                            Log.e(TAG, "Language detection failed for feed " + feed.getLink() + ". Defaulting to 'en'.", error);
                             saveFeedAndEntries(feed, "en");
                         }
                 );
@@ -215,8 +228,13 @@ public class FeedRepository {
     // This is the helper method, now with corrected threading logic.
     private void saveFeedAndEntries(RssFeed feed, String languageCode) {
         // This part correctly runs on a background thread.
+        
+        // Normalize the language code for TTS compatibility
+        String normalizedLanguage = LanguageUtil.normalizeLanguageCode(languageCode);
+        Log.d(TAG, "Saving feed with normalized language: " + languageCode + " → " + normalizedLanguage);
+        
         String imageUrl = "https://www.google.com/s2/favicons?sz=64&domain_url=" + feed.getLink();
-        Feed newFeed = new Feed(feed.getTitle(), feed.getLink(), feed.getDescription(), imageUrl, languageCode);
+        Feed newFeed = new Feed(feed.getTitle(), feed.getLink(), feed.getDescription(), imageUrl, normalizedLanguage);
 
         feedDao.insert(newFeed);
         long feedId = feedDao.getIdByLink(feed.getLink());
