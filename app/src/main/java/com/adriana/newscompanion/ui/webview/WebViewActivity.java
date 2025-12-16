@@ -503,6 +503,9 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             langForTts = entryInfo.getFeedLanguage();
         }
 
+        browserButton.setVisible(true);
+        offlineButton.setVisible(false);
+
         loadHtmlIntoWebView(htmlToLoad, titleToDisplay);
 
         if (getSupportActionBar() != null) {
