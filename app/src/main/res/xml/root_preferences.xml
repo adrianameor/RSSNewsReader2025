@@ -66,12 +66,6 @@
             app:summaryOn="@string/highlight_text_on"
             app:title="@string/highlight_text_title" />
 
-    </PreferenceCategory>
-
-    <PreferenceCategory
-        android:layout="@layout/text_preference_category"
-        app:title="@string/ai_features_header">
-
         <SwitchPreferenceCompat
             app:defaultValue="true"
             app:icon="@drawable/ic_auto_mode"
