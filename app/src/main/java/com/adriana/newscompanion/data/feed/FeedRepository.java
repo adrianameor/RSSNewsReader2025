@@ -158,12 +158,8 @@ public class FeedRepository {
     }
 
     public void addNewFeed(RssFeed feed) {
-        // --- THIS IS THE IMPROVED LOGIC: USE RSS LANGUAGE FIRST, THEN AUTO-DETECT ---
-        
-        // PRIORITY 1: Check if the RSS feed already contains a language tag
         String rssLanguage = feed.getLanguage();
         if (rssLanguage != null && !rssLanguage.trim().isEmpty() && !rssLanguage.equalsIgnoreCase("und")) {
-            // RSS feed has a language specified - use it directly!
             Log.d(TAG, "Using language from RSS feed: " + rssLanguage + " for feed: " + feed.getLink());
             saveFeedAndEntries(feed, rssLanguage);
             return;
@@ -171,18 +167,12 @@ public class FeedRepository {
         
         Log.d(TAG, "No valid language in RSS feed, attempting automatic detection for: " + feed.getLink());
 
-        // PRIORITY 2: If RSS doesn't have language, try automatic detection
-        // Get a CLEANER sample of text by using titles and paragraph text.
         StringBuilder sampleText = new StringBuilder();
-        for (int i = 0; i < Math.min(5, feed.getRssItems().size()); i++) { // Look at first 5 items
+        for (int i = 0; i < Math.min(5, feed.getRssItems().size()); i++) {
             RssItem item = feed.getRssItems().get(i);
-
-            // Add the title, which is usually clean text.
             if (item.getTitle() != null) {
                 sampleText.append(item.getTitle()).append(". ");
             }
-
-            // Parse the description HTML and get text only from paragraphs.
             if (item.getDescription() != null) {
                 String pText = Jsoup.parse(item.getDescription()).select("p").text();
                 if (pText != null && !pText.isEmpty()) {
@@ -191,32 +181,26 @@ public class FeedRepository {
             }
         }
 
-        // If there's no clean text to analyze, we fall back to a safe default.
         if (sampleText.toString().trim().isEmpty()) {
             Log.w(TAG, "No clean sample text found for language detection. Saving with default 'en'.");
             saveFeedAndEntries(feed, "en");
             return;
         }
 
-        // Run the automatic detection on the much cleaner sample text.
         Disposable languageDetectionDisposable = textUtil.identifyLanguageRx(sampleText.toString())
                 .subscribeOn(Schedulers.io())
                 .observeOn(Schedulers.io())
                 .subscribe(
                         identifiedLanguage -> {
-                            // After detection, check if the result is valid and useful.
                             if (identifiedLanguage != null && !identifiedLanguage.equalsIgnoreCase("und") && !identifiedLanguage.trim().isEmpty()) {
-                                // If it is, use the detected language.
                                 Log.d(TAG, "Auto-detected language for feed '" + feed.getLink() + "' as: " + identifiedLanguage);
                                 saveFeedAndEntries(feed, identifiedLanguage);
                             } else {
-                                // If the result is "und" or null, it's a failure. Fall back to the safe default.
                                 Log.w(TAG, "Language detection resulted in '" + identifiedLanguage + "'. Defaulting to 'en' for feed: " + feed.getLink());
                                 saveFeedAndEntries(feed, "en");
                             }
                         },
                         error -> {
-                            // PRIORITY 3: On any error, fall back to English
                             Log.e(TAG, "Language detection failed for feed " + feed.getLink() + ". Defaulting to 'en'.", error);
                             saveFeedAndEntries(feed, "en");
                         }
@@ -225,11 +209,7 @@ public class FeedRepository {
         disposables.add(languageDetectionDisposable);
     }
 
-    // This is the helper method, now with corrected threading logic.
     private void saveFeedAndEntries(RssFeed feed, String languageCode) {
-        // This part correctly runs on a background thread.
-        
-        // Normalize the language code for TTS compatibility
         String normalizedLanguage = LanguageUtil.normalizeLanguageCode(languageCode);
         Log.d(TAG, "Saving feed with normalized language: " + languageCode + " → " + normalizedLanguage);
         
@@ -254,10 +234,6 @@ public class FeedRepository {
         }
         markFeedAsPreloaded(feedId);
         entryRepository.requeueMissingEntries();
-
-        // --- THIS IS THE FIX for the threading issue that was preventing content downloads ---
-        // After all background DB work is done, we post the commands to start
-        // the next workers back onto the main Android thread.
 
         if (entryRepository.hasEmptyContentEntries()) {
             new Handler(Looper.getMainLooper()).post(() -> {
@@ -312,10 +288,14 @@ public class FeedRepository {
         }
     }
 
+    public Feed getFeedById(long id) {
+        return feedDao.getFeedById(id);
+    }
+
     public String refreshEntries() {
         List<Feed> feeds = getAllStaticFeeds();
-        ExecutorService executorService = Executors.newFixedThreadPool(4); // Use 4 threads for parallel fetching
-        AtomicInteger counter = new AtomicInteger(0); // Use AtomicInteger for thread-safe increments
+        ExecutorService executorService = Executors.newFixedThreadPool(4); 
+        AtomicInteger counter = new AtomicInteger(0);
 
         for (Feed feed : feeds) {
             executorService.submit(() -> {
@@ -330,7 +310,7 @@ public class FeedRepository {
                                 rssItem.getImageUrl(), rssItem.getCategory(), rssItem.getPubDate());
                         long insertedId = entryRepository.insert(feed.getId(), entry);
                         if (insertedId > 0) {
-                            counter.incrementAndGet(); // Increment the counter atomically
+                            counter.incrementAndGet();
                             entryRepository.updatePriority(1, insertedId);
                         } else {
                             histories.add(new History(entry.getFeedId(), new Date(), entry.getTitle(), entry.getLink()));
@@ -350,13 +330,13 @@ public class FeedRepository {
 
         executorService.shutdown();
         try {
-            executorService.awaitTermination(10, TimeUnit.MINUTES); // Wait for all threads to finish
+            executorService.awaitTermination(10, TimeUnit.MINUTES);
         } catch (InterruptedException e) {
             Log.e(TAG, "Error awaiting termination of executor service.", e);
         }
 
         entryRepository.requeueMissingEntries();
-        return "New entries: " + counter.get(); // Use AtomicInteger's get method
+        return "New entries: " + counter.get();
     }
 
 

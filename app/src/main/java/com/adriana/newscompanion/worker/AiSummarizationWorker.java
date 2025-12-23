@@ -9,6 +9,7 @@ import androidx.work.Worker;
 import androidx.work.WorkerParameters;
 
 import com.adriana.newscompanion.data.entry.Entry;
+import com.adriana.newscompanion.data.feed.Feed;
 import com.adriana.newscompanion.data.feed.FeedRepository;
 import com.adriana.newscompanion.data.repository.TranslationRepository;
 import com.adriana.newscompanion.data.sharedpreferences.SharedPreferencesRepository;
@@ -65,11 +66,8 @@ public class AiSummarizationWorker extends Worker {
 
             for (Entry entry : unsummarized) {
                 try {
-                    // FIX: Always use Original HTML as the source. 
-                    // This ensures we summarize the untranslated text.
                     String html = entry.getOriginalHtml();
                     if (html == null || html.isEmpty()) {
-                        // Fallback to html if original is somehow null
                         html = entry.getHtml();
                     }
                     
@@ -80,13 +78,28 @@ public class AiSummarizationWorker extends Worker {
 
                     Log.d(TAG, "Summarizing ID: " + entry.getId() + (autoTranslate ? " (Direct to " + targetLang + ")" : ""));
 
-                    // The "Shortcut": Summarize directly into target language if Auto-Translate is ON
+                    // 1. Generate the summary (translated or original)
                     String summary = translationRepository.summarizeText(plainText, length, autoTranslate ? targetLang : null).blockingGet();
 
                     if (summary != null && !summary.isEmpty()) {
                         feedRepository.getEntryRepository().updateSummary(summary, entry.getId());
+                        
+                        // 2. NEW: If Auto-Translate is ON, also translate the TITLE immediately
+                        if (autoTranslate) {
+                            Feed feed = feedRepository.getFeedById(entry.getFeedId());
+                            String sourceLang = (feed != null) ? feed.getLanguage() : "en";
+                            
+                            Log.d(TAG, "Translating title for Summary page | ID: " + entry.getId());
+                            String translatedTitle = translationRepository.translateText(entry.getTitle(), sourceLang, targetLang).blockingGet();
+                            
+                            if (translatedTitle != null && !translatedTitle.isEmpty()) {
+                                feedRepository.getEntryRepository().updateTranslatedTitle(translatedTitle, entry.getId());
+                            }
+                        }
+
+                        // Mark as summarized
                         feedRepository.getEntryRepository().markAsAiSummarized(entry.getId(), autoTranslate);
-                        Log.d(TAG, "✓ ID: " + entry.getId() + " summarized successfully.");
+                        Log.d(TAG, "✓ ID: " + entry.getId() + " summarized (and title translated) successfully.");
                     }
                 } catch (Exception e) {
                     Log.e(TAG, "Failed to summarize ID: " + entry.getId(), e);

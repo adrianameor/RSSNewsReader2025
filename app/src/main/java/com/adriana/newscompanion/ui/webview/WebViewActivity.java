@@ -502,7 +502,13 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         if (isSummaryView) {
             // STATE: SUMMARY VIEW
             String summaryText = entryInfo.getSummary();
-            titleToDisplay = getString(R.string.summary_prefix) + ": " + entryInfo.getEntryTitle();
+            
+            // FIX: Use translated title if translation exists and autoTranslate is on
+            String baseTitle = (autoTranslateOn && entryInfo.getTranslatedTitle() != null && !entryInfo.getTranslatedTitle().isEmpty())
+                    ? entryInfo.getTranslatedTitle()
+                    : entryInfo.getEntryTitle();
+            
+            titleToDisplay = getString(R.string.summary_prefix) + ": " + baseTitle;
 
             String[] paragraphs = summaryText.split("\\n\\n");
             StringBuilder htmlSummary = new StringBuilder();
@@ -606,8 +612,14 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 }
 
                 EntryInfo originalEntryInfo = webViewViewModel.getEntryInfoById(currentId);
-                String originalTitle = (originalEntryInfo != null) ? originalEntryInfo.getEntryTitle() : "";
-                String summaryTitle = getString(R.string.summary_prefix) + ": " + originalTitle;
+                
+                // FIX: Apply translated title logic here too
+                boolean autoTranslateOn = sharedPreferencesRepository.getAutoTranslate();
+                String baseTitle = (autoTranslateOn && originalEntryInfo != null && originalEntryInfo.getTranslatedTitle() != null && !originalEntryInfo.getTranslatedTitle().isEmpty())
+                        ? originalEntryInfo.getTranslatedTitle()
+                        : (originalEntryInfo != null ? originalEntryInfo.getEntryTitle() : "");
+                
+                String summaryTitle = getString(R.string.summary_prefix) + ": " + baseTitle;
 
                 String[] paragraphs = summary.split("\\n\\n");
                 StringBuilder htmlSummary = new StringBuilder();
@@ -763,8 +775,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
             case R.id.exitBrowser:
                 sharedPreferencesRepository.setWebViewMode(currentId, false);
-                EntryInfo entryInfoForExit = webViewViewModel.getLastVisitedEntry();
-                String rebuiltHtml = rebuildHtml(entryInfoForExit);
                 loadEntryContent();
                 offlineButton.setVisible(false);
                 browserButton.setVisible(true);
@@ -788,84 +798,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 boolean currentMode = sharedPreferencesRepository.getIsTranslatedView(currentId);
                 isTranslatedView = !currentMode;
                 sharedPreferencesRepository.setIsTranslatedView(currentId, isTranslatedView);
-
-                Entry entry = webViewViewModel.getEntryById(currentId);
-                if (entry == null) {
-                    makeSnackbar("Entry not found.");
-                    return true;
-                }
-
-                String translatedHtml = webViewViewModel.getHtmlById(currentId);
-                String originalHtmlForToggle = webViewViewModel.getOriginalHtmlById(currentId);
-                String htmlToLoad = isTranslatedView ? translatedHtml : originalHtmlForToggle;
-
-                if (htmlToLoad != null && !htmlToLoad.trim().isEmpty()) {
-                    toggleTranslationButton.setTitle(isTranslatedView ? "Show Original" : "Show Translation");
-                    loadHtmlIntoWebView(htmlToLoad);
-
-                    boolean wasPlaying = ttsPlayer.isSpeaking();
-
-                    if (wasPlaying) {
-                        ttsPlayer.stopTtsPlayback();
-                        Log.d(TAG, "Stopped TTS before toggle");
-                    }
-                    
-                    if (isTranslatedView) {
-                        String translated = entry.getTranslated();
-                        if (translated != null && !translated.trim().isEmpty()) {
-                            String lang = sharedPreferencesRepository.getDefaultTranslationLanguage();
-                            Log.d(TAG, "Toggle to translated: Using language: " + lang);
-
-                            ttsExtractor.setCurrentLanguage(lang, true);
-
-                            boolean extractSuccess = ttsPlayer.extract(entry.getId(), entry.getFeedId(), translated, lang);
-
-                            if (extractSuccess) {
-                                ttsPlayer.setupTts();
-
-                                if (wasPlaying && !isReadingMode) {
-                                    ttsPlayer.speak();
-                                    Log.d(TAG, "Resumed TTS playback with translated content");
-                                }
-                            }
-                        }
-                    } else {
-                        String original = entry.getContent();
-                        if (original != null && !original.trim().isEmpty()) {
-                            Disposable langDetectionDisposable = textUtil.identifyLanguageRx(original)
-                                    .subscribeOn(io.reactivex.rxjava3.schedulers.Schedulers.io())
-                                    .observeOn(io.reactivex.rxjava3.android.schedulers.AndroidSchedulers.mainThread())
-                                    .subscribe(
-                                            originalLang -> {
-                                                Log.d(TAG, "Toggle to original: Language identified as: " + originalLang);
-
-                                                ttsExtractor.setCurrentLanguage(originalLang, true);
-
-                                                boolean extractSuccess = ttsPlayer.extract(entry.getId(), entry.getFeedId(), original, originalLang);
-
-                                                if (extractSuccess) {
-                                                    ttsPlayer.setupTts();
-
-                                                    if (wasPlaying && !isReadingMode) {
-                                                        ttsPlayer.speak();
-                                                        Log.d(TAG, "Resumed TTS playback with original content");
-                                                    }
-                                                }
-                                            },
-                                            error -> {
-                                                Log.e(TAG, "Could not re-identify original language", error);
-                                                makeSnackbar("Could not identify language.");
-                                            }
-                                    );
-                            compositeDisposable.add(langDetectionDisposable);
-                        }
-                    }
-
-                } else {
-                    makeSnackbar("No alternate version available.");
-                    isTranslatedView = currentMode;
-                    sharedPreferencesRepository.setIsTranslatedView(currentId, currentMode);
-                }
+                loadEntryContent();
                 return true;
 
             default:
@@ -1560,7 +1493,9 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
         @Override
         public void onMetadataChanged(MediaMetadataCompat metadata) {
-            if (metadata == null) return;            long metadataEntryId = Long.parseLong(metadata.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID));
+            if (metadata == null) return;
+
+            long metadataEntryId = Long.parseLong(metadata.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID));
             long intentEntryId = getIntent().getLongExtra("entry_id", -1);
 
             if (metadataEntryId != intentEntryId) return;
