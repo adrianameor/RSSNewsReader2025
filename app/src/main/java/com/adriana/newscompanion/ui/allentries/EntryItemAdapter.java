@@ -28,18 +28,20 @@ import com.adriana.newscompanion.model.EntryInfo;
 
 public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.EntryItemHolder> {
 
-    // The field is correctly named 'entryItemClickInterface'
     EntryItemClickInterface entryItemClickInterface;
     private Context context;
     private boolean isSelectionMode = false;
     private static final String TAG = "EntryItemAdapter";
     private final boolean autoTranslateEnabled;
+    private final boolean summarizationEnabled;
+    private final boolean aiCleaningEnabled;
 
-    public EntryItemAdapter(EntryItemClickInterface entryItemClickInterface, boolean autoTranslateEnabled) {
+    public EntryItemAdapter(EntryItemClickInterface entryItemClickInterface, boolean autoTranslateEnabled, boolean summarizationEnabled, boolean aiCleaningEnabled) {
         super(DIFF_CALLBACK);
-        // FIX: Assign the constructor parameter to the correct field.
         this.entryItemClickInterface = entryItemClickInterface;
         this.autoTranslateEnabled = autoTranslateEnabled;
+        this.summarizationEnabled = summarizationEnabled;
+        this.aiCleaningEnabled = aiCleaningEnabled;
     }
 
     private static final DiffUtil.ItemCallback<EntryInfo> DIFF_CALLBACK = new DiffUtil.ItemCallback<EntryInfo>() {
@@ -50,36 +52,22 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
 
         @Override
         public boolean areContentsTheSame(@NonNull EntryInfo oldE, @NonNull EntryInfo newE) {
-            // -- START DEBUGGING LOGS --
-            if (oldE.getEntryId() == newE.getEntryId()) { // Only log for the same item
-                boolean titlesAreDifferent = !java.util.Objects.equals(oldE.getTranslatedTitle(), newE.getTranslatedTitle());
-                if (titlesAreDifferent) {
-                    Log.d("DIFF_DEBUG", "Item " + oldE.getEntryId() + ": Translated titles have changed!");
-                    Log.d("DIFF_DEBUG", "  Old: '" + oldE.getTranslatedTitle() + "'");
-                    Log.d("DIFF_DEBUG", "  New: '" + newE.getTranslatedTitle() + "'");
-                }
-            }
-
-            // 1. Check if the titles have changed (original OR translated).
             boolean sameTitle = java.util.Objects.equals(oldE.getEntryTitle(), newE.getEntryTitle()) &&
                     java.util.Objects.equals(oldE.getTranslatedTitle(), newE.getTranslatedTitle());
 
-            // 2. Check if the descriptions have changed (original OR translated).
             boolean sameDescription = java.util.Objects.equals(oldE.getEntryDescription(), newE.getEntryDescription()) &&
                     java.util.Objects.equals(oldE.getTranslatedSummary(), newE.getTranslatedSummary());
 
-            // 3. Check other UI-relevant states.
             boolean sameBookmark = java.util.Objects.equals(oldE.getBookmark(), newE.getBookmark());
             boolean sameVisited  = java.util.Objects.equals(oldE.getVisitedDate(), newE.getVisitedDate());
+            
+            // Add AI state checks to ensure UI updates when background workers finish
+            boolean sameAiState = oldE.isAiCleaned() == newE.isAiCleaned() &&
+                                 oldE.isAiSummarized() == newE.isAiSummarized() &&
+                                 oldE.isAiSummaryTranslated() == newE.isAiSummaryTranslated() &&
+                                 java.util.Objects.equals(oldE.getHtml(), newE.getHtml());
 
-            // If any of these are different, the contents are different.
-            boolean areTheSame = sameTitle && sameDescription && sameBookmark && sameVisited;
-
-            if (oldE.getEntryId() == newE.getEntryId() && !areTheSame) {
-                Log.d("DIFF_DEBUG", "Item " + oldE.getEntryId() + ": Contents are DIFFERENT. A redraw will be triggered.");
-            }
-
-            return areTheSame;
+            return sameTitle && sameDescription && sameBookmark && sameVisited && sameAiState;
         }
     };
 
@@ -100,7 +88,6 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
 
     public void exitSelectionMode() {
         isSelectionMode = false;
-        // FIX: Use the correct variable name 'entryItemClickInterface'
         if(entryItemClickInterface != null) entryItemClickInterface.onSelectionModeChanged(false);
         notifyDataSetChanged();
     }
@@ -128,7 +115,6 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
         }
 
         public void bind(EntryInfo entryInfo) {
-            Log.d("TranslationDebug", "ADAPTER: Binding entry " + entryInfo.getEntryId() + ". Received translated title: " + entryInfo.getTranslatedTitle());
             TextView statusView = view.findViewById(R.id.extractionStatus);
 
             textViewEntryTitle.setTextColor(textViewEntryPubDate.getTextColors());
@@ -137,7 +123,6 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
                 titleToDisplay = entryInfo.getEntryTitle();
             }
             textViewEntryTitle.setText(titleToDisplay);
-            Log.d("TranslationDebug", "ADAPTER: AFTER SETTING TEXT, TextView for entry " + entryInfo.getEntryId() + " now contains: '" + textViewEntryTitle.getText().toString() + "'");
             textViewFeedTitle.setText(entryInfo.getFeedTitle());
 
             String pubDate = covertTimeToText(entryInfo.getEntryPublishedDate());
@@ -155,7 +140,6 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
                 bookmarkButton.setIconTint(ContextCompat.getColorStateList(context, R.color.primary));
             }
 
-            // FIX: Use the correct variable name 'entryItemClickInterface'
             bookmarkButton.setOnClickListener(v -> {
                 if (entryItemClickInterface != null) {
                     String newBookmarkState = (entryInfo.getBookmark() == null || entryInfo.getBookmark().equals("N")) ? "Y" : "N";
@@ -163,7 +147,6 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
                 }
             });
 
-            // FIX: Use the correct variable name 'entryItemClickInterface' and pass the correct arguments to match the interface
             moreButton.setOnClickListener(v -> {
                 if (entryItemClickInterface != null) {
                     entryItemClickInterface.onMoreButtonClick(entryInfo.getEntryId(), entryInfo.getEntryLink(), entryInfo.getVisitedDate() == null);
@@ -185,7 +168,6 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
 
             selectedCheckbox.setVisibility(isSelectionMode ? View.VISIBLE : View.GONE);
             selectedCheckbox.setChecked(entryInfo.isSelected());
-            // FIX: Use the correct variable name 'entryItemClickInterface'
             selectedCheckbox.setOnCheckedChangeListener((buttonView, isChecked) -> {
                 if (isSelectionMode && entryItemClickInterface != null) {
                     entryInfo.setSelected(isChecked);
@@ -193,18 +175,14 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
                 }
             });
 
-            // FIX: Use the correct variable name 'entryItemClickInterface'
             view.setOnClickListener(v -> {
                 if (entryItemClickInterface != null) {
-                    boolean isTranslated = !TextUtils.isEmpty(entryInfo.getHtml())
-                            && (entryInfo.getOriginalHtml() == null || !entryInfo.getHtml().equals(entryInfo.getOriginalHtml()))
-                            && !TextUtils.isEmpty(entryInfo.getTranslatedTitle());
-
+                    boolean isTranslated = !TextUtils.isEmpty(entryInfo.getTranslated())
+                            && entryInfo.getTranslated().contains("--####--");
                     entryItemClickInterface.onEntryClick(entryInfo, isTranslated);
                 }
             });
 
-            // FIX: Use the correct variable name 'entryItemClickInterface'
             view.setOnLongClickListener(v -> {
                 isSelectionMode = true;
                 if(entryItemClickInterface != null) entryItemClickInterface.onSelectionModeChanged(true);
@@ -212,58 +190,103 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
                 return true;
             });
 
-            String content = entryInfo.getContent();
-            int priority = entryInfo.getPriority();
-            boolean hasOriginalHtml   = !TextUtils.isEmpty(entryInfo.getOriginalHtml());
+            // --- CIRCLE COLOR LOGIC IMPLEMENTATION ---
+            statusView.setVisibility(View.VISIBLE);
+            
+            boolean hasReadability = !TextUtils.isEmpty(entryInfo.getOriginalHtml());
             boolean isAiCleaned = entryInfo.isAiCleaned();
-            // The definition of "translated" now also requires the title to be present.
-            boolean hasTranslatedHtml = (!TextUtils.isEmpty(entryInfo.getHtml())
-                    && (entryInfo.getOriginalHtml() == null ||
-                    !entryInfo.getHtml().equals(entryInfo.getOriginalHtml())))
-                    && !TextUtils.isEmpty(entryInfo.getTranslatedTitle());
-            statusView.setText("");
+            boolean isAiSummarized = entryInfo.isAiSummarized();
+            boolean isAiSummaryTranslated = entryInfo.isAiSummaryTranslated();
+            boolean hasFullTranslation = !TextUtils.isEmpty(entryInfo.getTranslated()) && entryInfo.getTranslated().contains("--####--");
 
-            if (autoTranslateEnabled) {
-                // Green: Fully processed (AI-cleaned + translated)
-                if (hasTranslatedHtml && isAiCleaned) {
+            // Scenario 8: ALL ON
+            if (autoTranslateEnabled && summarizationEnabled && aiCleaningEnabled) {
+                if (hasFullTranslation && isAiCleaned && isAiSummarized && isAiSummaryTranslated) {
                     statusView.setBackgroundResource(R.drawable.status_dot_green);
-                    statusView.setVisibility(View.VISIBLE);
-                }
-                // Blue: AI-cleaned but not yet translated
-                else if (isAiCleaned && hasOriginalHtml) {
+                } else if (isAiCleaned) {
                     statusView.setBackgroundResource(R.drawable.status_dot_blue);
-                    statusView.setVisibility(View.VISIBLE);
-                }
-                // Yellow: Readability4J extracted but not AI-cleaned
-                else if (hasOriginalHtml) {
+                } else if (isAiSummarized && isAiSummaryTranslated) {
+                    statusView.setBackgroundResource(R.drawable.status_dot_purple);
+                } else if (hasReadability) {
                     statusView.setBackgroundResource(R.drawable.status_dot_yellow);
-                    statusView.setVisibility(View.VISIBLE);
-                }
-                // Red: No content extracted yet
-                else {
+                } else {
                     statusView.setBackgroundResource(R.drawable.status_dot_red);
-                    statusView.setVisibility(View.VISIBLE);
                 }
-            } else {
-                // Green: AI-cleaned (when auto-translate is off)
-                if (isAiCleaned && hasOriginalHtml) {
+            }
+            // Scenario 5: Auto Translate + Summarization
+            else if (autoTranslateEnabled && summarizationEnabled) {
+                if (hasFullTranslation && isAiSummarized && isAiSummaryTranslated) {
                     statusView.setBackgroundResource(R.drawable.status_dot_green);
-                    statusView.setVisibility(View.VISIBLE);
-                }
-                // Blue: Readability4J extracted but not AI-cleaned
-                else if (hasOriginalHtml) {
+                } else if (isAiSummarized && isAiSummaryTranslated) {
                     statusView.setBackgroundResource(R.drawable.status_dot_blue);
-                    statusView.setVisibility(View.VISIBLE);
-                }
-                // Yellow: In extraction queue
-                else if (priority > 0) {
+                } else if (hasReadability) {
                     statusView.setBackgroundResource(R.drawable.status_dot_yellow);
-                    statusView.setVisibility(View.VISIBLE);
-                }
-                // Red: No content extracted yet
-                else {
+                } else {
                     statusView.setBackgroundResource(R.drawable.status_dot_red);
-                    statusView.setVisibility(View.VISIBLE);
+                }
+            }
+            // Scenario 6: Auto Translate + AI Cleaned
+            else if (autoTranslateEnabled && aiCleaningEnabled) {
+                if (hasFullTranslation && isAiCleaned) {
+                    statusView.setBackgroundResource(R.drawable.status_dot_green);
+                } else if (isAiCleaned) {
+                    statusView.setBackgroundResource(R.drawable.status_dot_blue);
+                } else if (hasReadability) {
+                    statusView.setBackgroundResource(R.drawable.status_dot_yellow);
+                } else {
+                    statusView.setBackgroundResource(R.drawable.status_dot_red);
+                }
+            }
+            // Scenario 7: Summarization + AI Cleaned
+            else if (summarizationEnabled && aiCleaningEnabled) {
+                if (isAiSummarized && isAiCleaned) {
+                    statusView.setBackgroundResource(R.drawable.status_dot_green);
+                } else if (isAiSummarized) {
+                    statusView.setBackgroundResource(R.drawable.status_dot_blue);
+                } else if (hasReadability) {
+                    statusView.setBackgroundResource(R.drawable.status_dot_yellow);
+                } else {
+                    statusView.setBackgroundResource(R.drawable.status_dot_red);
+                }
+            }
+            // Scenario 2: Auto Translate Only
+            else if (autoTranslateEnabled) {
+                if (hasFullTranslation) {
+                    statusView.setBackgroundResource(R.drawable.status_dot_green);
+                } else if (hasReadability) {
+                    statusView.setBackgroundResource(R.drawable.status_dot_yellow);
+                } else {
+                    statusView.setBackgroundResource(R.drawable.status_dot_red);
+                }
+            }
+            // Scenario 3: Summarization Only
+            else if (summarizationEnabled) {
+                if (isAiSummarized) {
+                    statusView.setBackgroundResource(R.drawable.status_dot_green);
+                } else if (hasReadability) {
+                    statusView.setBackgroundResource(R.drawable.status_dot_yellow);
+                } else {
+                    statusView.setBackgroundResource(R.drawable.status_dot_red);
+                }
+            }
+            // Scenario 4: AI Cleaned Only
+            else if (aiCleaningEnabled) {
+                if (isAiCleaned) {
+                    statusView.setBackgroundResource(R.drawable.status_dot_green);
+                } else if (hasReadability) {
+                    statusView.setBackgroundResource(R.drawable.status_dot_yellow);
+                } else {
+                    statusView.setBackgroundResource(R.drawable.status_dot_red);
+                }
+            }
+            // Scenario 1: All OFF
+            else {
+                if (hasReadability) {
+                    statusView.setBackgroundResource(R.drawable.status_dot_green);
+                } else if (entryInfo.getPriority() > 0) {
+                    statusView.setBackgroundResource(R.drawable.status_dot_yellow);
+                } else {
+                    statusView.setBackgroundResource(R.drawable.status_dot_red);
                 }
             }
         }

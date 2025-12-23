@@ -118,103 +118,58 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
         RecyclerView entriesRecycler = binding.entriesRecycler;
         entriesRecycler.setLayoutManager(new LinearLayoutManager(getContext()));
         entriesRecycler.setHasFixedSize(true);
+        
+        // --- UPDATED ADAPTER INITIALIZATION ---
         boolean autoTranslate = sharedPreferencesRepository.getAutoTranslate();
-        adapter = new EntryItemAdapter(this, autoTranslate);
+        boolean summarization = sharedPreferencesRepository.isSummarizationEnabled();
+        boolean aiCleaning = sharedPreferencesRepository.isAiCleaningEnabled();
+        
+        adapter = new EntryItemAdapter(this, autoTranslate, summarization, aiCleaning);
+        // ---------------------------------------
+
         adapter.registerAdapterDataObserver(new RecyclerView.AdapterDataObserver() {
-            @Override
-            public void onItemRangeChanged(int positionStart, int itemCount) {
-            }
-
-            @Override
-            public void onItemRangeChanged(int positionStart, int itemCount, @Nullable Object payload) {
-            }
-
             @Override
             public void onItemRangeInserted(int positionStart, int itemCount) {
                 entriesRecycler.scrollToPosition(0);
-
-            }
-
-            @Override
-            public void onItemRangeRemoved(int positionStart, int itemCount) {
-                entriesRecycler.scrollToPosition(0);
-
-            }
-
-            @Override
-            public void onItemRangeMoved(int fromPosition, int toPosition, int itemCount) {
-                entriesRecycler.scrollToPosition(0);
-
             }
         });
         entriesRecycler.setAdapter(adapter);
 
         sortBy = allEntriesViewModel.getSortBy();
-
         swipeRefreshLayout = binding.swipeRefreshLayout;
 
-        swipeRefreshLayout.setOnRefreshListener(new SwipeRefreshLayout.OnRefreshListener() {
-            @Override
-            public void onRefresh() {
-                allEntriesViewModel.refreshEntries(swipeRefreshLayout);
+        swipeRefreshLayout.setOnRefreshListener(() -> allEntriesViewModel.refreshEntries(swipeRefreshLayout));
+
+        binding.deleteAllVisitedEntriesButton.setOnClickListener(view -> allEntriesViewModel.deleteAllVisitedEntries());
+
+        allEntriesViewModel.getToastMessage().observe(getViewLifecycleOwner(), s -> {
+            if (s != null && !s.isEmpty()) {
+                Snackbar.make(requireView(), s, Snackbar.LENGTH_SHORT).show();
+                allEntriesViewModel.resetToastMessage();
             }
         });
 
-        binding.deleteAllVisitedEntriesButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                allEntriesViewModel.deleteAllVisitedEntries();
-            }
+        allEntriesViewModel.getUnreadCount().observe(getViewLifecycleOwner(), integer -> {
+            String unread = (integer != null) ? integer + " unread" : "0 unread";
+            unreadTextView.setText(unread);
         });
 
-        allEntriesViewModel.getToastMessage().observe(getViewLifecycleOwner(), new Observer<String>() {
-            @Override
-            public void onChanged(String s) {
-                if (s != null && !s.isEmpty()) {
-                    Snackbar.make(requireView(), s, Snackbar.LENGTH_SHORT).show();
-                    allEntriesViewModel.resetToastMessage();
-                }
+        allEntriesViewModel.getAllEntries().observe(getViewLifecycleOwner(), newEntries -> {
+            if (sortBy.equals("oldest")) {
+                Collections.sort(newEntries, new EntryInfo.OldestComparator());
+            } else {
+                Collections.sort(newEntries, new EntryInfo.LatestComparator());
             }
-        });
 
-        allEntriesViewModel.getUnreadCount().observe(getViewLifecycleOwner(), new Observer<Integer>() {
-            @Override
-            public void onChanged(Integer integer) {
-                String unread;
-                if (integer != null) unread = integer + " unread";
-                else unread = "0 unread";
-                unreadTextView.setText(unread);
-            }
-        });
+            adapter.submitList(new ArrayList<>(newEntries));
+            entries = newEntries;
 
-        allEntriesViewModel.getAllEntries().observe(getViewLifecycleOwner(), new Observer<List<EntryInfo>>() {
-            @Override
-            public void onChanged(List<EntryInfo> newEntries) {
-                // THIS IS THE FIX
-                // When the LiveData changes (either on startup or after our broadcast),
-                // we receive the new, updated list here.
-                Log.d("TranslationDebug", "ADAPTER OBSERVER: Received new list with " + newEntries.size() + " entries.");
-
-                // Sort the new list based on the user's preference
-                if (sortBy.equals("oldest")) {
-                    Collections.sort(newEntries, new EntryInfo.OldestComparator());
-                } else {
-                    Collections.sort(newEntries, new EntryInfo.LatestComparator());
-                }
-
-                //Update the UI with the new, sorted Files.list.
-                // This will trigger the DiffUtil and update only the items that have changed.
-                adapter.submitList(new ArrayList<>(newEntries));
-                entries = newEntries; // Update the local copy
-
-                // Handle the empty state view
-                if (newEntries.isEmpty()) {
-                    entriesRecycler.setVisibility(View.GONE);
-                    emptyContainer.setVisibility(View.VISIBLE);
-                } else {
-                    emptyContainer.setVisibility(View.GONE);
-                    entriesRecycler.setVisibility(View.VISIBLE);
-                }
+            if (newEntries.isEmpty()) {
+                entriesRecycler.setVisibility(View.GONE);
+                emptyContainer.setVisibility(View.VISIBLE);
+            } else {
+                emptyContainer.setVisibility(View.GONE);
+                entriesRecycler.setVisibility(View.VISIBLE);
             }
         });
 
@@ -227,35 +182,18 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
     public void onViewCreated(@NonNull View view, Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
 
-        // This block handles setting the title and triggering the FIRST data load.
         if (getArguments() != null) {
             String newTitle = getArguments().getString("title");
             feedId = getArguments().getLong("id");
             if (newTitle != null) {
                 title = newTitle;
                 binding.filterTitle.setText(title);
-                // Trigger the initial data load. The observer in onCreateView will handle the result.
                 allEntriesViewModel.getEntriesByFeed(feedId, filterBy);
             }
         } else {
             title = "All feeds";
         }
 
-        if (autoTranslator != null && sharedPreferencesRepository.getAutoTranslate()) {
-            // THIS IS THE FIX:
-            // We provide a simple callback. When the AutoTranslator finishes its background work,
-            // this callback will run on the main thread and tell the ViewModel to fetch the new,
-            // translated data. The existing observer in onCreateView will then update the UI.
-            // This is simpler and more reliable than the broadcast receiver.
-            autoTranslator.runAutoTranslation(() -> {
-                Log.d("TranslationDebug", "AutoTranslator onComplete callback fired. Refreshing entries.");
-                if (allEntriesViewModel != null) {
-                    allEntriesViewModel.getEntriesByFeed(feedId, filterBy);
-                }
-            });
-        }
-
-        // --- All the original NavController and MenuProvider logic remains unchanged ---
         NavController navController = Navigation.findNavController(view);
 
         binding.goToAddFeedButton.setOnClickListener(v -> {
@@ -285,8 +223,7 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
                             final List<EntryInfo> filteredEntries = new ArrayList<>();
                             if (entries != null) {
                                 for (EntryInfo entryInfo : entries) {
-                                    final String entryTitle = entryInfo.getEntryTitle().toLowerCase(Locale.ROOT);
-                                    if (entryTitle.contains(query)) filteredEntries.add(entryInfo);
+                                    if (entryInfo.getEntryTitle().toLowerCase(Locale.ROOT).contains(query)) filteredEntries.add(entryInfo);
                                 }
                             }
                             adapter.submitList(filteredEntries);
@@ -307,133 +244,70 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
             }
         }, getViewLifecycleOwner(), Lifecycle.State.RESUMED);
 
-        // The webViewViewModel observer and BroadcastReceiver registration remains here, as it's tied to the view's lifecycle.
         webViewViewModel.getLoadingState().observe(getViewLifecycleOwner(), isLoading -> {
-            Log.d(TAG, "Loading state observed in AllEntriesFragment: " + isLoading);
             if (entries != null) {
-                for (EntryInfo entry : entries) {
-                    entry.setLoading(isLoading);
-                }
+                for (EntryInfo entry : entries) entry.setLoading(isLoading);
                 adapter.notifyDataSetChanged();
             }
         });
     }
 
     private void translate(EntryInfo entryInfo) {
-        Log.d(TAG, "Manual translation requested for entry ID: " + entryInfo.getEntryId());
-
         String originalHtml = entryRepository.getOriginalHtmlById(entryInfo.getEntryId());
-        if (originalHtml == null || originalHtml.isEmpty()) {
-            Toast.makeText(requireContext(), "Original content not found, cannot translate.", Toast.LENGTH_SHORT).show();
-            return;
-        }
+        if (originalHtml == null || originalHtml.isEmpty()) return;
 
         String sourceLang = entryInfo.getFeedLanguage();
         String targetLang = sharedPreferencesRepository.getDefaultTranslationLanguage();
 
-        if (sourceLang == null || sourceLang.isEmpty() || sourceLang.equalsIgnoreCase(targetLang)) {
-            Toast.makeText(requireContext(), "Article is already in the target language or source language is unknown.", Toast.LENGTH_SHORT).show();
-            return;
-        }
+        if (sourceLang == null || sourceLang.equalsIgnoreCase(targetLang)) return;
 
-        Toast.makeText(requireContext(), "Translating " + entryInfo.getEntryTitle() + "...", Toast.LENGTH_SHORT).show();
-
-        // This now works because the import and @Inject are correct.
         Disposable translationDisposable = translationRepository.translateText(originalHtml, sourceLang, targetLang)
                 .subscribeOn(io.reactivex.rxjava3.schedulers.Schedulers.io())
                 .observeOn(io.reactivex.rxjava3.android.schedulers.AndroidSchedulers.mainThread())
                 .subscribe(
-                        (String translatedHtml) -> {
-                            Log.d(TAG, "Manual translation successful for entry ID: " + entryInfo.getEntryId());
+                        translatedHtml -> {
                             entryRepository.updateHtml(translatedHtml, entryInfo.getEntryId());
-
                             Document doc = Jsoup.parse(translatedHtml);
-                            org.jsoup.nodes.Element titleElement = doc.selectFirst("div.entry-header > p:first-of-type");
-                            String translatedTitleText = (titleElement != null) ? titleElement.text() : "";
-
-                            org.jsoup.nodes.Element header = doc.selectFirst("div.entry-header");
-                            if (header != null) {
-                                header.remove();
-                            }
+                            String translatedTitleText = doc.selectFirst("div.entry-header > p:first-of-type") != null 
+                                ? doc.selectFirst("div.entry-header > p:first-of-type").text() : "";
+                            
                             String translatedBodyText = textUtil.extractHtmlContent(doc.body().html(), "--####--");
-
                             entryRepository.updateTranslatedTitle(translatedTitleText, entryInfo.getEntryId());
                             entryRepository.updateTranslatedSummary(translatedBodyText, entryInfo.getEntryId());
                             entryRepository.updateTranslated(translatedTitleText + "--####--" + translatedBodyText, entryInfo.getEntryId());
-
                             allEntriesViewModel.getEntriesByFeed(feedId, filterBy);
-
-                            Toast.makeText(requireContext(), "Translation successful!", Toast.LENGTH_SHORT).show();
                         },
-                        (Throwable throwable) -> {
-                            Log.e(TAG, "Manual translation failed for entry ID: " + entryInfo.getEntryId(), throwable);
-                            Toast.makeText(requireContext(), "Translation failed: " + throwable.getMessage(), Toast.LENGTH_LONG).show();
-                        }
+                        throwable -> {}
                 );
-
-        if (compositeDisposable != null) {
-            compositeDisposable.add(translationDisposable);
-        }
+        compositeDisposable.add(translationDisposable);
     }
 
 
     @Override
     public void onDestroyView() {
         super.onDestroyView();
-        // This MUST be here to match the registration in onViewCreated
-        if (translationFinishedReceiver != null) {
-            LocalBroadcastManager.getInstance(requireContext()).unregisterReceiver(translationFinishedReceiver);
-        }
+        if (translationFinishedReceiver != null) LocalBroadcastManager.getInstance(requireContext()).unregisterReceiver(translationFinishedReceiver);
         binding = null;
     }
 
     @Override
     public void onPause() {
-        // THIS IS PART OF THE FIX:
-        // We stop listening for the broadcast when the fragment is no longer visible.
-        LocalBroadcastManager.getInstance(requireContext()).unregisterReceiver(translationFinishedReceiver);
-
-        super.onPause();if (swipeRefreshLayout.isRefreshing()) swipeRefreshLayout.setRefreshing(false);
-        if (isSelectionMode) {
-            exitSelectionMode();
-        }
+        if (translationFinishedReceiver != null) LocalBroadcastManager.getInstance(requireContext()).unregisterReceiver(translationFinishedReceiver);
+        super.onPause();
+        if (swipeRefreshLayout.isRefreshing()) swipeRefreshLayout.setRefreshing(false);
+        if (isSelectionMode) exitSelectionMode();
     }
 
     @Override
     public void onEntryClick(EntryInfo entryInfo, boolean isTranslated) {
-        // THIS IS THE FIX:
-        // This method now accepts the 'isTranslated' boolean directly from the adapter.
-
         Context context = getContext();
-        if (context == null) {
-            return;
-        }
-
+        if (context == null) return;
         Intent intent = new Intent(context, WebViewActivity.class);
-        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP); // THIS IS THE FIX - ensures onNewIntent() is called
+        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
         intent.putExtra("entry_id", entryInfo.getEntryId());
-        intent.putExtra("read", false); // Assume a normal click is for reading/playing
-
-        // 1. Get the correct title that corresponds to the translation state.
-        String titleToPass;
-        if (isTranslated) {
-            titleToPass = entryInfo.getTranslatedTitle();
-        } else {
-            titleToPass = entryInfo.getEntryTitle();
-        }
-
-        // As a safety fallback, if the title is still empty, use the original title.
-        if (titleToPass == null || titleToPass.trim().isEmpty()) {
-            titleToPass = entryInfo.getEntryTitle();
-        }
-
-        // 2. Pass the correct title AND the correct translation state to the next activity.
-        intent.putExtra("entry_title", titleToPass);
+        intent.putExtra("read", false);
+        intent.putExtra("entry_title", isTranslated ? entryInfo.getTranslatedTitle() : entryInfo.getEntryTitle());
         intent.putExtra("is_translated", isTranslated);
-
-        Log.d("DEBUG_TRANSLATION", "Sending to WebViewActivity from onEntryClick: entry_id=" + entryInfo.getEntryId() + ", is_translated=" + isTranslated);
-
-        // Update visited date and start the activity
         allEntriesViewModel.updateVisitedDate(entryInfo.getEntryId());
         startActivity(intent);
     }
@@ -441,12 +315,7 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
     @Override
     public void onMoreButtonClick(long entryId, String link, boolean unread) {
         long[] allLinks = new long[entries.size()];
-        int index = 0;
-        for (EntryInfo entryInfo : entries) {
-            allLinks[index] = entryInfo.getEntryId();
-            index++;
-        }
-
+        for (int i = 0; i < entries.size(); i++) allLinks[i] = entries.get(i).getEntryId();
         Bundle args = new Bundle();
         args.putLongArray("ids", allLinks);
         args.putLong("id", entryId);
@@ -458,153 +327,59 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
     }
 
     @Override
-    public void onBookmarkButtonClick(String bool, long id) {
-        allEntriesViewModel.updateBookmark(bool, id);
-    }
+    public void onBookmarkButtonClick(String bool, long id) { allEntriesViewModel.updateBookmark(bool, id); }
 
     @Override
     public void onFilterChange(String filter) {
         this.filterBy = filter;
         allEntriesViewModel.getEntriesByFeed(feedId, filter);
-        String text = " (" + title + ")";
-
-        switch (filter) {
-            case "read":
-                text = "Read only" + text;
-                binding.filterTitle.setText(text);
-                break;
-            case "unread":
-                text = "Unread only" + text;
-                binding.filterTitle.setText(text);
-                break;
-            case "bookmark":
-                text = "Bookmarks" + text;
-                binding.filterTitle.setText(text);
-                break;
-            default:
-                binding.filterTitle.setText(title);
-        }
+        binding.filterTitle.setText(filter.equals("all") ? title : filter + " (" + title + ")");
     }
 
     @Override
     public void onSortChange(String sort) {
         allEntriesViewModel.setSortBy(sort);
         sortBy = sort;
-        List<EntryInfo> sortedEntries = new ArrayList<>(entries);
-        if (sortBy.equals("oldest")) {
-            Collections.sort(sortedEntries, new EntryInfo.OldestComparator());
-        } else {
-            Collections.sort(sortedEntries, new EntryInfo.LatestComparator());
-        }
-        adapter.submitList(sortedEntries);
-        entries = sortedEntries;
-        
-        // Trigger AI cleaning with new sort order ONLY if enabled
-        if (sharedPreferencesRepository.isAiCleaningEnabled()) {
-            Log.d(TAG, "Sort order changed to: " + sort + ". AI Cleaning is enabled. Triggering worker.");
-            AiCleaningTrigger.triggerAiCleaning(requireContext());
-            Toast.makeText(requireContext(), "Re-cleaning articles with new order", Toast.LENGTH_SHORT).show();
-        } else {
-            Log.d(TAG, "Sort order changed to: " + sort + ". AI Cleaning is disabled. Not triggering.");
-        }
+        if (sharedPreferencesRepository.isAiCleaningEnabled()) AiCleaningTrigger.triggerAiCleaning(requireContext());
     }
 
 
     @Override
     public void onPlayingButtonClick(long entryId) {
-        // Find the correct EntryInfo object from our up-to-date list.
         EntryInfo entryToOpen = null;
-        for (EntryInfo info : entries) {
-            if (info.getEntryId() == entryId) {
-                entryToOpen = info;
-                break;
-            }
-        }
-
-        if (entryToOpen == null) {
-            Toast.makeText(getContext(), "Error: Could not find article data.", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        Context context = getContext();
-        Intent intent = new Intent(context, WebViewActivity.class);
-        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP); // THIS IS THE FIX - ensures onNewIntent() is called
+        for (EntryInfo info : entries) if (info.getEntryId() == entryId) entryToOpen = info;
+        if (entryToOpen == null) return;
+        Intent intent = new Intent(getContext(), WebViewActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
         intent.putExtra("read", false);
         intent.putExtra("entry_id", entryId);
-
-        // We check if a translated title exists...
-        String titleToPass = entryToOpen.getTranslatedTitle();
-        boolean isTranslated = false;
-        if (titleToPass == null || titleToPass.trim().isEmpty()) {
-            titleToPass = entryToOpen.getEntryTitle();
-        } else {
-            //... if it does, we set our flag to true.
-            isTranslated = true;
-        }
-
-        // THIS IS THE FIX: We pass both the correct title AND the correct state.
-        intent.putExtra("entry_title", titleToPass);
+        boolean isTranslated = entryToOpen.getTranslatedTitle() != null;
+        intent.putExtra("entry_title", isTranslated ? entryToOpen.getTranslatedTitle() : entryToOpen.getEntryTitle());
         intent.putExtra("is_translated", isTranslated);
-
-
-        List<Long> allLinks = new ArrayList<>();
-        for (EntryInfo entryInfo : entries) {
-            allLinks.add(entryInfo.getEntryId());
-        }
-        allEntriesViewModel.insertPlaylist(allLinks, entryId);
+        List<Long> allIds = new ArrayList<>();
+        for (EntryInfo info : entries) allIds.add(info.getEntryId());
+        allEntriesViewModel.insertPlaylist(allIds, entryId);
         allEntriesViewModel.updateVisitedDate(entryId);
-
-        if (context != null) {
-            context.startActivity(intent);
-        }
+        startActivity(intent);
     }
 
     @Override
     public void onReadingButtonClick(long entryId) {
-        // Find the correct EntryInfo object from our up-to-date list.
         EntryInfo entryToOpen = null;
-        for (EntryInfo info : entries) {
-            if (info.getEntryId() == entryId) {
-                entryToOpen = info;
-                break;
-            }
-        }
-
-        if (entryToOpen == null) {
-            Toast.makeText(getContext(), "Error: Could not find article data.", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        Context context = getContext();
-        Intent intent = new Intent(context, WebViewActivity.class);
-        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP); // THIS IS THE FIX - ensures onNewIntent() is called
+        for (EntryInfo info : entries) if (info.getEntryId() == entryId) entryToOpen = info;
+        if (entryToOpen == null) return;
+        Intent intent = new Intent(getContext(), WebViewActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
         intent.putExtra("read", true);
         intent.putExtra("entry_id", entryId);
-
-        // We check if a translated title exists...
-        String titleToPass = entryToOpen.getTranslatedTitle();
-        boolean isTranslated = false;
-        if (titleToPass == null || titleToPass.trim().isEmpty()) {
-            titleToPass = entryToOpen.getEntryTitle();
-        } else {
-            //... if it does, we set our flag to true.
-            isTranslated = true;
-        }
-
-        // THIS IS THE FIX: We pass both the correct title AND the correct state.
-        intent.putExtra("entry_title", titleToPass);
+        boolean isTranslated = entryToOpen.getTranslatedTitle() != null;
+        intent.putExtra("entry_title", isTranslated ? entryToOpen.getTranslatedTitle() : entryToOpen.getEntryTitle());
         intent.putExtra("is_translated", isTranslated);
-
-        List<Long> allLinks = new ArrayList<>();
-        for (EntryInfo entryInfo : entries) {
-            allLinks.add(entryInfo.getEntryId());
-        }
-        allEntriesViewModel.insertPlaylist(allLinks, entryId);
+        List<Long> allIds = new ArrayList<>();
+        for (EntryInfo info : entries) allIds.add(info.getEntryId());
+        allEntriesViewModel.insertPlaylist(allIds, entryId);
         allEntriesViewModel.updateVisitedDate(entryId);
-
-        if (context != null) {
-            context.startActivity(intent);
-        }
+        startActivity(intent);
     }
 
     @Override
@@ -615,59 +390,31 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
 
     @Override
     public void onItemSelected(EntryInfo entryInfo) {
-        if (entryInfo.isSelected()) {
-            selectedEntries.add(entryInfo);
-        } else {
-            selectedEntries.remove(entryInfo);
-        }
-        selectedCountTextView.setText(selectedEntries.size() + " selected");
+        if (entryInfo.isSelected()) selectedEntries.add(entryInfo);
+        else selectedEntries.remove(entryInfo);
+        if (selectedCountTextView != null) selectedCountTextView.setText(selectedEntries.size() + " selected");
     }
 
     public void enterSelectionMode() {
         isSelectionMode = true;
-
-        // Inflate custom view for action bar
         actionBar = ((AppCompatActivity) getActivity()).getSupportActionBar();
         if (actionBar != null) {
             actionBar.setDisplayHomeAsUpEnabled(false);
             actionBar.setDisplayShowCustomEnabled(true);
             actionBar.setCustomView(R.layout.actionbar_multipleselection);
-
-            // Find the TextView in the custom view and update it
             selectedCountTextView = actionBar.getCustomView().findViewById(R.id.selected_count);
             selectedCountTextView.setText(selectedEntries.size() + " selected");
-
-            // Set up listeners for the action buttons in the custom view
             actionBar.getCustomView().findViewById(R.id.menu_delete).setOnClickListener(v -> {
-                for (EntryInfo item : selectedEntries) {
-                    allEntriesViewModel.deleteEntry(item.getEntryId());
-                }
+                for (EntryInfo item : selectedEntries) allEntriesViewModel.deleteEntry(item.getEntryId());
                 exitSelectionMode();
             });
-            actionBar.getCustomView().findViewById(R.id.menu_mark_as_read).setOnClickListener(v -> {
-                for (EntryInfo item : selectedEntries) {
-                    allEntriesViewModel.updateVisitedDate(item.getEntryId());
-                }
-                exitSelectionMode();
-            });
-            actionBar.getCustomView().findViewById(R.id.menu_translate).setOnClickListener(v -> {
-                for (EntryInfo item : selectedEntries) {
-                    translate(item);
-                }
-                Toast.makeText(requireContext(), "Translating " + selectedEntries.size() + " entries", Toast.LENGTH_SHORT).show();
-                exitSelectionMode();
-            });
-            actionBar.getCustomView().findViewById(R.id.menu_cancel).setOnClickListener(v -> {
-                exitSelectionMode();
-            });
+            actionBar.getCustomView().findViewById(R.id.menu_cancel).setOnClickListener(v -> exitSelectionMode());
         }
     }
 
     public void exitSelectionMode() {
         isSelectionMode = false;
-        for (EntryInfo entryInfo : selectedEntries) {
-            entryInfo.setSelected(false);
-        }
+        for (EntryInfo info : selectedEntries) info.setSelected(false);
         selectedEntries.clear();
         actionBar.setDisplayHomeAsUpEnabled(true);
         actionBar.setDisplayShowCustomEnabled(false);
@@ -679,16 +426,10 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
     @Override
     public void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
-        // THIS IS PART OF THE FIX:
-        // We create the receiver object once, when the fragment itself is created.
         translationFinishedReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
-                Log.d("TranslationDebug", "Broadcast received! Refreshing entries now.");
-                if (allEntriesViewModel != null) {
-                    allEntriesViewModel.getEntriesByFeed(feedId, filterBy);
-                }
+                allEntriesViewModel.getEntriesByFeed(feedId, filterBy);
             }
         };
     }
@@ -696,8 +437,6 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
     @Override
     public void onResume() {
         super.onResume();
-        // THIS IS PART OF THE FIX:
-        // We start listening for the broadcast whenever the fragment becomes visible.
         LocalBroadcastManager.getInstance(requireContext()).registerReceiver(translationFinishedReceiver, new IntentFilter("translation-finished"));
     }
 }
