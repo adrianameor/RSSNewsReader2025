@@ -539,7 +539,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 contentForTts = entryInfo.getContent();
                 langForTts = entryInfo.getFeedLanguage();
             }
-            summarizeButton.setTitle("Summarize");
+            summarizeButton.setTitle("Show Summary");
             browserButton.setVisible(true);
         }
 

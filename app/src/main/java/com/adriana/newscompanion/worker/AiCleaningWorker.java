@@ -53,11 +53,11 @@ public class AiCleaningWorker extends Worker {
                         feedRepository.getEntryRepository().updateHtml(cleanedHtml, entry.getId());
                         feedRepository.getEntryRepository().updateOriginalHtml(cleanedHtml, entry.getId());
 
-                        // 2. CRITICAL: Wipe any "Ghost" translations. 
-                        // This forces Phase 3 (Translation) to translate the NEW CLEAN version.
+                        // 2. FIX: We only wipe the 'translated' body, NOT the title.
+                        // This ensures the Summarizer's translated title stays visible while cleaning happens.
                         feedRepository.getEntryRepository().updateTranslated(null, entry.getId());
-                        feedRepository.getEntryRepository().updateTranslatedTitle(null, entry.getId());
-                        Log.d(TAG, "✓ ID " + entry.getId() + " cleaned and translations reset.");
+                        
+                        Log.d(TAG, "✓ ID " + entry.getId() + " cleaned. Body reset for re-translation, Title preserved.");
                     }
                     feedRepository.getEntryRepository().markAsAiCleaned(entry.getId());
                 }
