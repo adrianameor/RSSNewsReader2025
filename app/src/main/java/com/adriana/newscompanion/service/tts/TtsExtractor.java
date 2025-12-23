@@ -13,6 +13,7 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
 import androidx.core.content.ContextCompat;
+import androidx.work.ExistingWorkPolicy;
 import androidx.work.OneTimeWorkRequest;
 import androidx.work.WorkContinuation;
 import androidx.work.WorkManager;
@@ -149,38 +150,48 @@ public class TtsExtractor {
         } else {
             // --- ALL EXTRACTIONS FINISHED ---
             // This is the point where we trigger the AI Chain!
-            Log.d(TAG, "Extraction finished. Triggering AI Pipeline Chain...");
+            Log.d(TAG, "Extraction finished. Triggering Unique AI Pipeline Chain...");
             triggerAiPipelineChain();
         }
     }
 
     private void triggerAiPipelineChain() {
         WorkManager workManager = WorkManager.getInstance(context);
+        
+        // FIX: Use Unique Work with REPLACE policy to kill any old "ghost" tasks
+        // and ensure articles 1 & 2 are processed in the strict new order.
+        String uniqueWorkName = "AI_CONTENT_PIPELINE";
         WorkContinuation continuation = null;
 
-        // 1. PHASE 1: SUMMARIZE
+        // 1. PHASE 1: SUMMARIZE (Absolute Priority)
         if (sharedPreferencesRepository.isSummarizationEnabled()) {
             OneTimeWorkRequest task = new OneTimeWorkRequest.Builder(AiSummarizationWorker.class).build();
-            continuation = workManager.beginWith(task);
+            continuation = workManager.beginUniqueWork(uniqueWorkName, ExistingWorkPolicy.REPLACE, task);
         }
 
         // 2. PHASE 2: CLEAN
         if (sharedPreferencesRepository.isAiCleaningEnabled()) {
             OneTimeWorkRequest task = new OneTimeWorkRequest.Builder(AiCleaningWorker.class).build();
-            if (continuation == null) continuation = workManager.beginWith(task);
-            else continuation = continuation.then(task);
+            if (continuation == null) {
+                continuation = workManager.beginUniqueWork(uniqueWorkName, ExistingWorkPolicy.REPLACE, task);
+            } else {
+                continuation = continuation.then(task);
+            }
         }
 
         // 3. PHASE 3: TRANSLATE
         if (sharedPreferencesRepository.getAutoTranslate()) {
             OneTimeWorkRequest task = new OneTimeWorkRequest.Builder(TranslationWorker.class).build();
-            if (continuation == null) continuation = workManager.beginWith(task);
-            else continuation = continuation.then(task);
+            if (continuation == null) {
+                continuation = workManager.beginUniqueWork(uniqueWorkName, ExistingWorkPolicy.REPLACE, task);
+            } else {
+                continuation = continuation.then(task);
+            }
         }
 
         if (continuation != null) {
             continuation.enqueue();
-            Log.d(TAG, "AI Pipeline Chain enqueued successfully.");
+            Log.d(TAG, "Strict AI Pipeline enqueued. Existing tasks replaced.");
         }
     }
 
@@ -222,7 +233,6 @@ public class TtsExtractor {
                     try {
                         if (reader.peek() == JsonToken.STRING) {
                             String html = reader.nextString();
-                            boolean isTranslated = sharedPreferencesRepository.getIsTranslatedView(currentIdInProgress);
                             if (html != null) {
                                 Article article = new Readability4JExtended(currentLink, html).parse();
                                 if (currentTitle != null) content.append(currentTitle);

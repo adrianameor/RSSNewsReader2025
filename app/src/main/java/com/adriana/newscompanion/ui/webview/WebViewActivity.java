@@ -516,6 +516,8 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                     ? sharedPreferencesRepository.getDefaultTranslationLanguage()
                     : entryInfo.getFeedLanguage();
 
+            loading.setVisibility(View.GONE);
+
             summarizeButton.setTitle("Show Full Article");
             browserButton.setVisible(false);
         } else {
@@ -563,7 +565,9 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
         sharedPreferencesRepository.setCurrentReadingEntryId(currentId);
         initializePlaylistSystem();
-        syncLoadingWithTts();
+        if (!isSummaryView) {
+            syncLoadingWithTts();
+        }
 
         if (!isReadingMode) {
             functionButtons.setVisibility(View.VISIBLE);
@@ -1556,13 +1560,19 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
         @Override
         public void onMetadataChanged(MediaMetadataCompat metadata) {
-            if (metadata == null) return;
-
-            long metadataEntryId = Long.parseLong(metadata.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID));
+            if (metadata == null) return;            long metadataEntryId = Long.parseLong(metadata.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID));
             long intentEntryId = getIntent().getLongExtra("entry_id", -1);
 
             if (metadataEntryId != intentEntryId) return;
             if (isLoadingFromNewIntent) return;
+
+            // --- FIX START: Handle Summary View Visibility Immediately ---
+            if (isSummaryView) {
+                runOnUiThread(() -> loading.setVisibility(View.GONE)); // Hide it for summary
+                updateToggleTranslationVisibility();
+                return;
+            }
+            // --- FIX END ---
 
             String titleFromIntent = getIntent().getStringExtra("entry_title");
             if (titleFromIntent != null && !titleFromIntent.isEmpty() && getSupportActionBar() != null) {
@@ -1592,24 +1602,16 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 bookmarkButton.setIcon(R.drawable.ic_bookmark_filled);
             }
 
-            // --- SYNC FIX 1: Don't overwrite Summary View ---
-            if (isSummaryView) {
-                Log.d(TAG, "onMetadataChanged: Summary is active. Skipping refresh to prevent overwriting.");
-                updateToggleTranslationVisibility();
-                return;
-            }
-
             isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(currentId);
 
-            // --- SYNC FIX 2: Load correct HTML column ---
             EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
             boolean translationExists = entryInfo != null && entryInfo.getTranslated() != null && !entryInfo.getTranslated().trim().isEmpty();
 
             String htmlToLoad;
             if (isTranslatedView && translationExists) {
-                htmlToLoad = webViewViewModel.getHtmlById(currentId); // Cleaned + Translated
+                htmlToLoad = webViewViewModel.getHtmlById(currentId);
             } else {
-                htmlToLoad = webViewViewModel.getOriginalHtmlById(currentId); // Cleaned Original
+                htmlToLoad = webViewViewModel.getOriginalHtmlById(currentId);
             }
 
             if (htmlToLoad == null) {
