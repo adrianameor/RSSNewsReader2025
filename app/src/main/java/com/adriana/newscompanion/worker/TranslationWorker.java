@@ -2,14 +2,15 @@ package com.adriana.newscompanion.worker;
 
 import android.content.Context;
 import android.content.Intent;
-import android.util.Log;import androidx.annotation.NonNull;
+import android.util.Log;
+import androidx.annotation.NonNull;
 import androidx.hilt.work.HiltWorker;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import androidx.work.Worker;
 import androidx.work.WorkerParameters;
 
-import com.google.mlkit.nl.languageid.LanguageIdentification;
-import com.google.mlkit.nl.languageid.LanguageIdentifier;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
 
 import java.util.List;
 
@@ -27,7 +28,6 @@ public class TranslationWorker extends Worker {
     private final EntryRepository entryRepository;
     private final TranslationRepository translationRepository;
     private final SharedPreferencesRepository sharedPreferencesRepository;
-    private final LanguageIdentifier languageIdentifier;
 
     @AssistedInject
     public TranslationWorker(
@@ -40,66 +40,52 @@ public class TranslationWorker extends Worker {
         this.entryRepository = entryRepository;
         this.translationRepository = translationRepository;
         this.sharedPreferencesRepository = sharedPreferencesRepository;
-        this.languageIdentifier = LanguageIdentification.getClient();
     }
 
     @NonNull
     @Override
     public Result doWork() {
-        Log.d(TAG, "WORKER: doWork started.");
+        Log.d(TAG, "WORKER: doWork started (Phase 3: Full Translation).");
         List<EntryInfo> entriesToProcess = entryRepository.getUntranslatedEntriesInfo();
-        Log.d(TAG, "WORKER: Found " + entriesToProcess.size() + " entries that may need translation.");
-
         String defaultTargetLang = sharedPreferencesRepository.getDefaultTranslationLanguage();
 
         for (EntryInfo entry : entriesToProcess) {
             try {
-                String originalTitle = entry.getEntryTitle();
-                if (originalTitle == null || originalTitle.isEmpty()) {
-                    continue; // Skip if there's no title.
-                }
-
-                // THIS IS THE FIX: We are removing the complex, unreliable "hybrid" logic.
-                // We will now ONLY TRUST the language set for the entire feed (`feedLanguage`).
-                // This is a much more reliable signal and will prevent jumbled translations.
                 String sourceLang = entry.getFeedLanguage();
                 String targetLang = entry.getTargetTranslationLanguage() != null ? entry.getTargetTranslationLanguage() : defaultTargetLang;
 
-                // Condition to check if translation is needed at all for this entry.
-                if (sourceLang == null || sourceLang.isEmpty() || sourceLang.equals("und") || sourceLang.equalsIgnoreCase(targetLang)) {
-                    Log.d(TAG, "WORKER: Skipping entry " + entry.getEntryId() + " (Source: " + sourceLang + ", Target: " + targetLang + " - no translation needed).");
-                    continue;
-                }
+                if (sourceLang == null || sourceLang.isEmpty() || sourceLang.equals("und") || sourceLang.equalsIgnoreCase(targetLang)) continue;
 
-                Log.d(TAG, "WORKER: Processing entry ID: " + entry.getEntryId() + " ('" + originalTitle + "') from " + sourceLang + " to " + targetLang);
-
-                // Translate Title only if it's missing or empty.
-                if (entry.getTranslatedTitle() == null || entry.getTranslatedTitle().trim().isEmpty()) {
-                    String translatedTitle = translationRepository.translateText(originalTitle, sourceLang, targetLang).blockingGet();
-                    Log.d(TAG, "WORKER: For entry " + entry.getEntryId() + ", received translated title: '" + translatedTitle + "'");
+                // 1. Translate Title
+                String translatedTitle = entry.getTranslatedTitle();
+                if (translatedTitle == null || translatedTitle.trim().isEmpty()) {
+                    translatedTitle = translationRepository.translateText(entry.getEntryTitle(), sourceLang, targetLang).blockingGet();
                     entryRepository.updateTranslatedTitle(translatedTitle, entry.getEntryId());
                 }
 
-                // Translate Summary (Description) only if it's missing or empty.
-                if (entry.getTranslatedSummary() == null || entry.getTranslatedSummary().trim().isEmpty()) {
-                    if (entry.getEntryDescription() != null && !entry.getEntryDescription().isEmpty()) {
-                        String translatedSummary = translationRepository.translateText(entry.getEntryDescription(), sourceLang, targetLang).blockingGet();
-                        entryRepository.updateTranslatedSummary(translatedSummary, entry.getEntryId());
-                    }
+                // 2. Translate Full Article HTML
+                String cleanedHtml = entryRepository.getHtmlById(entry.getEntryId());
+                if (cleanedHtml != null && !cleanedHtml.isEmpty()) {
+                    Log.d(TAG, "WORKER: Translating cleaned HTML for ID: " + entry.getEntryId());
+                    String translatedHtml = translationRepository.translateText(cleanedHtml, sourceLang, targetLang).blockingGet();
+                    
+                    // Save HTML for the WebView
+                    entryRepository.updateHtml(translatedHtml, entry.getEntryId());
+                    
+                    // FIX: Extract PLAIN TEXT for TTS (prevents reading <HTML> tags)
+                    Document doc = Jsoup.parse(translatedHtml);
+                    String plainText = doc.text(); 
+                    
+                    // Save Title + Text for TTS
+                    entryRepository.updateTranslated(translatedTitle + "--####--" + plainText, entry.getEntryId());
                 }
 
             } catch (Exception e) {
-                Log.e(TAG, "WORKER: CRASHED while processing entry " + entry.getEntryId(), e);
+                Log.e(TAG, "WORKER: Error processing ID " + entry.getEntryId(), e);
             }
         }
 
-        Log.d(TAG, "WORKER: Finished processing all entries.");
-
-        // Send the "shout" to the UI to tell it to refresh.
-        Log.d(TAG, "Broadcasting 'translation-finished' event.");
-        Intent intent = new Intent("translation-finished");
-        LocalBroadcastManager.getInstance(getApplicationContext()).sendBroadcast(intent);
-
+        LocalBroadcastManager.getInstance(getApplicationContext()).sendBroadcast(new Intent("translation-finished"));
         return Result.success();
     }
 }

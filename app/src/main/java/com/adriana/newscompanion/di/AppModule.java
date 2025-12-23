@@ -25,13 +25,13 @@ public class AppModule {
     @Singleton
     public static AppDatabase provideDatabase(Application app, AppDatabase.Callback callback) {
         return Room.databaseBuilder(app, AppDatabase.class, "app_database")
-                .addMigrations(AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4, AppDatabase.MIGRATION_4_5, AppDatabase.MIGRATION_5_6, AppDatabase.MIGRATION_6_7, AppDatabase.MIGRATION_7_8)
+                .addMigrations(AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4, AppDatabase.MIGRATION_4_5, AppDatabase.MIGRATION_5_6, AppDatabase.MIGRATION_6_7, AppDatabase.MIGRATION_7_8, AppDatabase.MIGRATION_8_9, AppDatabase.MIGRATION_9_10)
                 .addCallback(callback)
                 .allowMainThreadQueries()
                 .build();
     }
 
-    @Provides // no need include singleton as room automatically set singleton for DAO
+    @Provides
     public static FeedDao provideFeedDao(AppDatabase db) {
         return db.feedDao();
     }

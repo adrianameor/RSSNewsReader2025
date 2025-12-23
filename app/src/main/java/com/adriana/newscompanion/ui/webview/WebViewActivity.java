@@ -424,16 +424,18 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     }
 
     private void updateToggleTranslationVisibility() {
-        String originalHtml = webViewViewModel.getOriginalHtmlById(currentId);
-        String translatedHtml = webViewViewModel.getHtmlById(currentId);
-
-        if (originalHtml != null && translatedHtml != null && !originalHtml.equals(translatedHtml)) {
-            toggleTranslationButton.setVisible(true);
-        } else {
+        EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
+        if (entryInfo == null || isSummaryView) {
             toggleTranslationButton.setVisible(false);
+            return;
         }
 
-        Log.d(TAG, "ToggleTranslationButton visibility set to: " + (originalHtml != null && translatedHtml != null && !originalHtml.equals(translatedHtml)));
+        boolean translationExists = entryInfo.getTranslated() != null && !entryInfo.getTranslated().trim().isEmpty();
+        toggleTranslationButton.setVisible(translationExists);
+
+        if (translationExists) {
+            toggleTranslationButton.setTitle(isTranslatedView ? "Show Original" : "Show Translation");
+        }
     }
 
     private void initializePlaybackModes() {
@@ -460,28 +462,35 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             ttsPlaylist.updatePlayingId(currentId);
         }
 
+        String currentHtml = entryInfo.getHtml();
         String originalHtml = entryRepository.getOriginalHtmlById(currentId);
 
-        if (originalHtml == null || originalHtml.trim().isEmpty()) {
-            Log.d(TAG, "No offline content found for entry " + currentId + ". Loading URL directly.");
-            if (currentLink != null && !currentLink.isEmpty()) {
-                webView.loadUrl(currentLink);
-            } else {
-                makeSnackbar("Error: No URL found for this article.");
-                finish();
-                return;
-            }
+        if (currentHtml == null || currentHtml.trim().isEmpty()) {
+            webView.loadUrl(currentLink);
             if (getSupportActionBar() != null) getSupportActionBar().setTitle(entryInfo.getEntryTitle());
             browserButton.setVisible(false);
             offlineButton.setVisible(false);
             toggleTranslationButton.setVisible(false);
-            reloadButton.setVisible(true);
-            highlightTextButton.setVisible(false);
+            summarizeButton.setVisible(false);
+            translationButton.setVisible(false); // Added: Hide translate button if no content
             return;
         }
 
-        boolean isStartingInTranslatedViewFromIntent = getIntent().getBooleanExtra("is_translated", false);
-        isTranslatedView = isStartingInTranslatedViewFromIntent;
+        // --- AUTO-SHOW LOGIC ---
+        boolean autoTranslateOn = sharedPreferencesRepository.getAutoTranslate();
+        boolean translationExists = entryInfo.getTranslated() != null && !entryInfo.getTranslated().trim().isEmpty();
+        boolean summaryExists = entryInfo.getSummary() != null && !entryInfo.getSummary().trim().isEmpty();
+
+        if (isInitialLoad) {
+            if (sharedPreferencesRepository.isSummarizationEnabled() && summaryExists) {
+                isSummaryView = true;
+            } else {
+                isSummaryView = false;
+                // If summary off, default to Translated view if setting is ON and ready
+                isTranslatedView = autoTranslateOn && translationExists;
+            }
+            isInitialLoad = false;
+        }
 
         sharedPreferencesRepository.setIsTranslatedView(currentId, isTranslatedView);
 
@@ -489,40 +498,65 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         String titleToDisplay;
         String contentForTts;
         String langForTts;
-        boolean translationExists = entryInfo.getHtml() != null && !entryInfo.getHtml().equals(originalHtml);
 
-        if (isTranslatedView && translationExists) {
-            htmlToLoad = entryInfo.getHtml();
-            titleToDisplay = entryInfo.getTranslatedTitle();
-            contentForTts = entryInfo.getTranslated();
-            langForTts = sharedPreferencesRepository.getDefaultTranslationLanguage();
+        if (isSummaryView) {
+            // STATE: SUMMARY VIEW
+            String summaryText = entryInfo.getSummary();
+            titleToDisplay = getString(R.string.summary_prefix) + ": " + entryInfo.getEntryTitle();
+
+            String[] paragraphs = summaryText.split("\\n\\n");
+            StringBuilder htmlSummary = new StringBuilder();
+            for (String p : paragraphs) {
+                if (!p.trim().isEmpty()) htmlSummary.append("<p>").append(p).append("</p>");
+            }
+            htmlToLoad = htmlSummary.toString();
+            contentForTts = titleToDisplay + " --####-- " + summaryText;
+
+            langForTts = entryInfo.isAiSummaryTranslated()
+                    ? sharedPreferencesRepository.getDefaultTranslationLanguage()
+                    : entryInfo.getFeedLanguage();
+
+            summarizeButton.setTitle("Show Full Article");
+            browserButton.setVisible(false);
         } else {
-            htmlToLoad = originalHtml;
-            titleToDisplay = entryInfo.getEntryTitle();
-            contentForTts = entryInfo.getContent();
-            langForTts = entryInfo.getFeedLanguage();
+            // STATE: FULL ARTICLE VIEW
+            if (isTranslatedView && translationExists) {
+                htmlToLoad = currentHtml; // Cleaned + Translated
+                titleToDisplay = entryInfo.getTranslatedTitle();
+                contentForTts = entryInfo.getTranslated();
+                langForTts = sharedPreferencesRepository.getDefaultTranslationLanguage();
+            } else {
+                htmlToLoad = originalHtml; // Cleaned Original (Fixed by worker)
+                titleToDisplay = entryInfo.getEntryTitle();
+                contentForTts = entryInfo.getContent();
+                langForTts = entryInfo.getFeedLanguage();
+            }
+            summarizeButton.setTitle("Summarize");
+            browserButton.setVisible(true);
         }
-
-        browserButton.setVisible(true);
-        offlineButton.setVisible(false);
 
         loadHtmlIntoWebView(htmlToLoad, titleToDisplay);
 
         if (getSupportActionBar() != null) {
             getSupportActionBar().setTitle(titleToDisplay);
         }
-        toggleTranslationButton.setVisible(translationExists);
-        toggleTranslationButton.setTitle(isTranslatedView ? "Show Original" : "Show Translation");
+
+        // --- UI VISIBILITY FIXES ---
+        summarizeButton.setVisible(sharedPreferencesRepository.isSummarizationEnabled());
+
+        // Hide manual translate button if auto-translate is on OR if we are in summary view
+        translationButton.setVisible(!autoTranslateOn && !isSummaryView);
+
+        // Update the toggle button (Show Original/Translation)
+        updateToggleTranslationVisibility();
 
         if (bookmark == null || bookmark.equals("N")) {
-            bookmarkButton.setIcon(R.drawable.ic_bookmark_outline);
+            bookmarkButton.setIcon(ContextCompat.getDrawable(this, R.drawable.ic_bookmark_outline));
         } else {
-            bookmarkButton.setIcon(R.drawable.ic_bookmark_filled);
+            bookmarkButton.setIcon(ContextCompat.getDrawable(this, R.drawable.ic_bookmark_filled));
         }
 
-        if (langForTts == null || langForTts.trim().isEmpty()) {
-            langForTts = "en";
-        }
+        if (langForTts == null || langForTts.trim().isEmpty()) langForTts = "en";
         if (contentForTts != null && !contentForTts.trim().isEmpty()) {
             ttsPlayer.extract(currentId, feedId, contentForTts, langForTts);
         }
@@ -534,13 +568,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         if (!isReadingMode) {
             functionButtons.setVisibility(View.VISIBLE);
             functionButtons.setAlpha(1.0f);
-        }
-
-        // --- ADD THIS BLOCK to show/hide the summarize button ---
-        if (sharedPreferencesRepository.isSummarizationEnabled()) {
-            summarizeButton.setVisible(true);
-        } else {
-            summarizeButton.setVisible(false);
         }
     }
 
@@ -597,20 +624,16 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
     private boolean handleSummarizeClick() {
         if (isSummaryView) {
-            // If we are currently showing a summary, switch back to the full article
-            if (originalHtmlForSummary != null) {
-                loadHtmlIntoWebView(originalHtmlForSummary);
-                isSummaryView = false;
-                summarizeButton.setTitle("Summarize");
-
-                // Restore visibility of translation buttons
-                translationButton.setVisible(true);
-                updateToggleTranslationVisibility();
-                browserButton.setVisible(true);
-            }
+            isSummaryView = false;
+            loadEntryContent();
         } else {
-            // Otherwise, trigger the summarization process
-            webViewViewModel.summarizeArticle(currentId);
+            EntryInfo info = webViewViewModel.getEntryInfoById(currentId);
+            if (info != null && info.getSummary() != null && !info.getSummary().trim().isEmpty()) {
+                isSummaryView = true;
+                loadEntryContent();
+            } else {
+                webViewViewModel.summarizeArticle(currentId);
+            }
         }
         return true;
     }
@@ -1533,20 +1556,13 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
         @Override
         public void onMetadataChanged(MediaMetadataCompat metadata) {
-            if (metadata == null) {
-                return;
-            }
-            
+            if (metadata == null) return;
+
             long metadataEntryId = Long.parseLong(metadata.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID));
             long intentEntryId = getIntent().getLongExtra("entry_id", -1);
 
-            if (metadataEntryId != intentEntryId) {
-                return;
-            }
-
-            if (isLoadingFromNewIntent) {
-                return;
-            }
+            if (metadataEntryId != intentEntryId) return;
+            if (isLoadingFromNewIntent) return;
 
             String titleFromIntent = getIntent().getStringExtra("entry_title");
             if (titleFromIntent != null && !titleFromIntent.isEmpty() && getSupportActionBar() != null) {
@@ -1568,7 +1584,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             content = metadata.getString("content");
             bookmark = metadata.getString("bookmark");
             currentLink = metadata.getString("link");
-            updateToggleTranslationVisibility();
             feedId = metadata.getLong("feedId");
 
             if (bookmark == null || bookmark.equals("N")) {
@@ -1577,10 +1592,25 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 bookmarkButton.setIcon(R.drawable.ic_bookmark_filled);
             }
 
+            // --- SYNC FIX 1: Don't overwrite Summary View ---
+            if (isSummaryView) {
+                Log.d(TAG, "onMetadataChanged: Summary is active. Skipping refresh to prevent overwriting.");
+                updateToggleTranslationVisibility();
+                return;
+            }
+
             isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(currentId);
-            String htmlToLoad = isTranslatedView
-                    ? webViewViewModel.getHtmlById(currentId)
-                    : webViewViewModel.getOriginalHtmlById(currentId);
+
+            // --- SYNC FIX 2: Load correct HTML column ---
+            EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
+            boolean translationExists = entryInfo != null && entryInfo.getTranslated() != null && !entryInfo.getTranslated().trim().isEmpty();
+
+            String htmlToLoad;
+            if (isTranslatedView && translationExists) {
+                htmlToLoad = webViewViewModel.getHtmlById(currentId); // Cleaned + Translated
+            } else {
+                htmlToLoad = webViewViewModel.getOriginalHtmlById(currentId); // Cleaned Original
+            }
 
             if (htmlToLoad == null) {
                 htmlToLoad = metadata.getString("html");
@@ -1604,11 +1634,11 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 showOfflineButton = true;
             }
 
+            updateToggleTranslationVisibility();
 
             if (ttsPlayer.isWebViewConnected()) {
                 ttsPlayer.setUiControlPlayback(true);
             }
-
         }
 
         @Override

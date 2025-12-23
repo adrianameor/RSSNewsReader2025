@@ -13,6 +13,9 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
 import androidx.core.content.ContextCompat;
+import androidx.work.OneTimeWorkRequest;
+import androidx.work.WorkContinuation;
+import androidx.work.WorkManager;
 
 import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
 import io.reactivex.rxjava3.core.Flowable;
@@ -25,6 +28,9 @@ import com.adriana.newscompanion.data.playlist.PlaylistRepository;
 import com.adriana.newscompanion.data.sharedpreferences.SharedPreferencesRepository;
 import com.adriana.newscompanion.service.util.TextUtil;
 import com.adriana.newscompanion.ui.webview.WebViewListener;
+import com.adriana.newscompanion.worker.AiCleaningWorker;
+import com.adriana.newscompanion.worker.AiSummarizationWorker;
+import com.adriana.newscompanion.worker.TranslationWorker;
 
 import net.dankito.readability4j.Article;
 import net.dankito.readability4j.extended.Readability4JExtended;
@@ -103,7 +109,6 @@ public class TtsExtractor {
         Log.d(TAG, "extractAllEntries called | extractionInProgress = " + extractionInProgress);
 
         if (extractionInProgress && currentIdInProgress == -1) {
-            Log.w(TAG, "Recovery: extractionInProgress = true but currentIdInProgress == -1 → Resetting flag.");
             extractionInProgress = false;
         }
 
@@ -115,36 +120,25 @@ public class TtsExtractor {
 
             if (attempts < MAX_RETRIES) {
                 retryCountMap.put(retryId, attempts + 1);
-                Log.d(TAG, "Retrying failed article ID: " + retryId + " | Attempt " + (attempts + 1));
                 entry = entryRepository.getEntryById(retryId);
             } else {
-                Log.w(TAG, "Max retries reached for article ID: " + retryId);
                 extractAllEntries();
                 return;
             }
         }
 
         if (entry != null) {
-            Log.d(TAG, "Next entry: id=" + entry.getId() + ", title=" + entry.getTitle() + ", priority=" + entry.getPriority());
             if (!extractionInProgress) {
-                Log.d(TAG, "extracting...");
                 extractionInProgress = true;
                 currentIdInProgress = entry.getId();
                 currentLink = entry.getLink();
                 currentTitle = entry.getTitle();
                 delayTime = feedRepository.getDelayTimeById(entry.getFeedId());
-                ContextCompat.getMainExecutor(context).execute(new Runnable() {
-                    @Override
-                    public void run() {
-                        webView.loadUrl(currentLink);
-                        Log.d("Test url",currentLink);
-                    }
-                });
+                ContextCompat.getMainExecutor(context).execute(() -> webView.loadUrl(currentLink));
                 lastExtractStart = System.currentTimeMillis();
 
                 new Handler(Looper.getMainLooper()).postDelayed(() -> {
                     if (extractionInProgress && System.currentTimeMillis() - lastExtractStart > 30000) {
-                        Log.w(TAG, "[Timeout] Extraction stuck >30s, resetting manually");
                         failedIds.add(currentIdInProgress);
                         currentIdInProgress = -1;
                         extractionInProgress = false;
@@ -152,145 +146,49 @@ public class TtsExtractor {
                     }
                 }, 30000);
             }
-        }else {
-            Log.d(TAG, "No entry returned by getEmptyContentEntry()");
+        } else {
+            // --- ALL EXTRACTIONS FINISHED ---
+            // This is the point where we trigger the AI Chain!
+            Log.d(TAG, "Extraction finished. Triggering AI Pipeline Chain...");
+            triggerAiPipelineChain();
         }
     }
 
-    private void translateHtml(String html, String content, final long currentIdInProgress, String currentTitle) {
-        String sourceLanguage = textUtil.identifyLanguageRx(content).blockingGet();
-        String targetLanguage = sharedPreferencesRepository.getDefaultTranslationLanguage();
-        setCurrentLanguage(targetLanguage, false);
+    private void triggerAiPipelineChain() {
+        WorkManager workManager = WorkManager.getInstance(context);
+        WorkContinuation continuation = null;
 
-        if (currentTitle != null && !sourceLanguage.equalsIgnoreCase(targetLanguage)) {
-            Log.d(TAG, "translateHtml: Translating ID " + currentIdInProgress + " from " + sourceLanguage + " to " + targetLanguage);
+        // 1. PHASE 1: SUMMARIZE
+        if (sharedPreferencesRepository.isSummarizationEnabled()) {
+            OneTimeWorkRequest task = new OneTimeWorkRequest.Builder(AiSummarizationWorker.class).build();
+            continuation = workManager.beginWith(task);
+        }
 
-            // 1. Create two separate background jobs: one for the title, one for the body.
-            Single<String> titleTranslationJob = textUtil.translateText(sourceLanguage, targetLanguage, currentTitle);
-            Single<String> bodyTranslationJob = translateBodyRobustly(html, sourceLanguage, targetLanguage, currentIdInProgress);
+        // 2. PHASE 2: CLEAN
+        if (sharedPreferencesRepository.isAiCleaningEnabled()) {
+            OneTimeWorkRequest task = new OneTimeWorkRequest.Builder(AiCleaningWorker.class).build();
+            if (continuation == null) continuation = workManager.beginWith(task);
+            else continuation = continuation.then(task);
+        }
 
-            // 2. Use Single.zip to run both jobs and wait until BOTH are complete.
-            disposables.add(Single.zip(
-                            titleTranslationJob,
-                            bodyTranslationJob,
-                            // 3. This 'BiFunction' runs only when both jobs have succeeded.
-                            (translatedTitle, translatedBodyHtml) -> {
-                                Log.d("TranslationDebug", "TTSExtractor: Translation successful for ID: " + currentIdInProgress);
-                                Log.d("TranslationDebug", "TTSExtractor: Received Translated Title: '" + translatedTitle + "'");
+        // 3. PHASE 3: TRANSLATE
+        if (sharedPreferencesRepository.getAutoTranslate()) {
+            OneTimeWorkRequest task = new OneTimeWorkRequest.Builder(TranslationWorker.class).build();
+            if (continuation == null) continuation = workManager.beginWith(task);
+            else continuation = continuation.then(task);
+        }
 
-                                // 4. Save the results to the database together.
-                                entryRepository.updateTranslatedTitle(translatedTitle, currentIdInProgress);
-                                entryRepository.updateHtml(translatedBodyHtml, currentIdInProgress);
-
-                                // 5. Extract and save plain text for search and summary.
-                                org.jsoup.nodes.Document doc = org.jsoup.Jsoup.parse(translatedBodyHtml);
-                                String translatedBodyText = textUtil.extractHtmlContent(doc.body().html(), delimiter);
-                                entryRepository.updateTranslatedSummary(translatedBodyText, currentIdInProgress);
-                                entryRepository.updateTranslated(translatedTitle + delimiter + translatedBodyText, currentIdInProgress);
-
-                                return true; // Return a value to satisfy the BiFunction
-                            })
-                    .subscribeOn(Schedulers.io())
-                    .observeOn(AndroidSchedulers.mainThread())
-                    .subscribe(
-                            success -> {
-                                // This runs after everything has been saved.
-                                Log.d(TAG, "Successfully translated and saved article ID: " + currentIdInProgress);
-                                setCurrentLanguage(targetLanguage, true);
-                                if (!sharedPreferencesRepository.hasTranslationToggle(currentIdInProgress)) {
-                                    sharedPreferencesRepository.setIsTranslatedView(currentIdInProgress, true);
-                                }
-                            },
-                            error -> {
-                                // This runs if either the title or body translation fails.
-                                Log.e(TAG, "Failed to zip and translate article ID: " + currentIdInProgress, error);
-                                if (!failedIds.contains(currentIdInProgress)) {
-                                    failedIds.add(currentIdInProgress);
-                                }
-                            }
-                    )
-            );
+        if (continuation != null) {
+            continuation.enqueue();
+            Log.d(TAG, "AI Pipeline Chain enqueued successfully.");
         }
     }
 
-    // This is the new, corrected version that processes chunks sequentially to prevent overwhelming the translation service.
-    private Single<String> translateBodyRobustly(String originalHtml, String sourceLang, String targetLang, long entryId) {
-        return Single.create(emitter -> {
-            // --- THIS IS THE FIX ---// 1. Check if a translated version already exists in the database.
-            String existingTranslatedHtml = entryRepository.getHtmlById(entryId);
-            if (existingTranslatedHtml != null && !existingTranslatedHtml.equals(originalHtml)) {
-                Log.d("TranslationDebug", "Found existing translation for entry " + entryId + ". Skipping re-translation.");
-                emitter.onSuccess(existingTranslatedHtml); // Immediately return the existing translation.
-                return;
-            }
-            // --- END OF FIX ---
-            try {
-                // Ensure the necessary import is at the top of your file: import io.reactivex.rxjava3.core.Flowable;
-                Document doc = Jsoup.parse(originalHtml);
-                List<Element> elementsToTranslate = new ArrayList<>();
-
-                for (Element element : doc.select("p, h2, h3, h4, h5, h6, li, blockquote, figcaption, td, th")) {
-                    if (!element.text().trim().isEmpty()) {
-                        elementsToTranslate.add(element);
-                    }
-                }
-
-                if (elementsToTranslate.isEmpty()) {
-                    Disposable fallbackDisposable = textUtil.translateHtml(sourceLang, targetLang, doc.body().html(), progress -> {})
-                            .onErrorReturnItem(originalHtml)
-                            .subscribe(emitter::onSuccess, emitter::onError);
-                    // Use setDisposable because we are creating and returning a single disposable here.
-                    emitter.setDisposable(fallbackDisposable);
-                    return;
-                }
-
-                // --- THIS IS THE FIX ---
-                // We now use Flowable and concatMap to process each translation chunk ONE-BY-ONE.
-                // This is much safer and will not starve the background thread pool or translation API.
-                Disposable sequentialDisposable = Flowable.fromIterable(elementsToTranslate)
-                        .concatMap(element -> {
-                            String originalChunkHtml = element.html();
-                            // For each element, create a translation job. concatMap waits for it to complete before starting the next.
-                            return textUtil.translateHtml(sourceLang, targetLang, originalChunkHtml, progress -> {})
-                                    .onErrorReturn(error -> {
-                                        Log.w(TAG, "Failed to translate a chunk for entry ID " + entryId + ". Using original. Error: " + error.getMessage());
-                                        return originalChunkHtml;
-                                    })
-                                    .toFlowable(); // Convert the Single back to a Flowable for concatMap.
-                        })
-                        .toList() // Collect all the results (translated or original) into a single list.
-                        .subscribe(
-                                translatedChunks -> {
-                                    // This runs only after ALL chunks have been processed sequentially.
-                                    for (int i = 0; i < translatedChunks.size(); i++) {
-                                        elementsToTranslate.get(i).html(translatedChunks.get(i));
-                                    }
-                                    // Complete the Single with the fully re-assembled HTML.
-                                    emitter.onSuccess(doc.body().html());
-                                },
-                                emitter::onError // If a fundamental error occurs, propagate it.
-                        );
-                // --- END OF FIX ---
-
-                emitter.setDisposable(sequentialDisposable); // Allow the entire sequence to be cancelled.
-
-            } catch (Exception e) {
-                emitter.onError(e); // Catch any initial Jsoup parsing errors.
-            }
-        });
-    }
-
-    public void setCallback(TtsPlayerListener callback) {
-        this.ttsCallback = callback;
-    }
-
-    public void setCallback(WebViewListener callback) {
-        this.webViewCallback = callback;
-    }
+    public void setCallback(TtsPlayerListener callback) { this.ttsCallback = callback; }
+    public void setCallback(WebViewListener callback) { this.webViewCallback = callback; }
 
     public void prioritize() {
         Date newPlaylistDate = playlistRepository.getLatestPlaylistCreatedDate();
-
         if (playlistDate == null || !playlistDate.equals(newPlaylistDate)) {
             playlistDate = newPlaylistDate;
             entryRepository.clearPriority();
@@ -299,228 +197,92 @@ public class TtsExtractor {
             int index = playlist.indexOf(lastId);
             int priority = 1;
             entryRepository.updatePriority(priority, lastId);
-
-            boolean loop = true;
-            while (loop) {
-                index += 1;
-                priority += 1;
-                if (index < playlist.size()) {
-                    long id = playlist.get(index);
-                    entryRepository.updatePriority(priority, id);
-                } else {
-                    loop = false;
-                }
+            while (index + 1 < playlist.size()) {
+                index++;
+                priority++;
+                entryRepository.updatePriority(priority, playlist.get(index));
             }
         }
         extractAllEntries();
     }
 
     public class WebClient extends WebViewClient {
-
         private final Handler handler = new Handler();
-
         @Override
-        public void onPageStarted(WebView view, String url, Bitmap favicon) {
-            super.onPageStarted(view, url, favicon);
-        }
-
-        @Override
-        public boolean shouldOverrideUrlLoading(WebView view, String url) {
-            view.loadUrl(url);
-            return true;
-        }
+        public boolean shouldOverrideUrlLoading(WebView view, String url) { view.loadUrl(url); return true; }
 
         @Override
         public void onPageFinished(WebView view, String url) {
-            Log.d(TAG, "[onPageFinished] triggered for: " + url);
             super.onPageFinished(view, url);
             if (extractionInProgress && webView.getProgress() == 100) {
-                handler.postDelayed(new Runnable() {
-                    @Override
-                    public void run() {
-                        webView.evaluateJavascript("(function() {return document.getElementsByTagName('html')[0].outerHTML;})();", new ValueCallback<String>() {
-                            @Override
-                            public void onReceiveValue(final String value) {
-                                Log.d(TAG, "Receiving value...");
-                                JsonReader reader = new JsonReader(new StringReader(value));
-                                reader.setLenient(true);
-                                boolean stopExtracting = false;
-                                StringBuilder content = new StringBuilder();
-                                try {
-                                    if (reader.peek() == JsonToken.STRING) {
-                                        String html = reader.nextString();
-                                        boolean isTranslated = sharedPreferencesRepository.getIsTranslatedView(currentIdInProgress);
-                                        if (html != null) {
-                                            Readability4JExtended readability4J = new Readability4JExtended(currentLink, html);
-                                            Article article = readability4J.parse();
-
-                                            // --- THIS IS THE FIX ---
-                                            // We no longer add the delimiter here. We only add the title.
-                                            if (currentTitle != null && !currentTitle.isEmpty()) {
-                                                content.append(currentTitle);
+                handler.postDelayed(() -> webView.evaluateJavascript("(function() {return document.getElementsByTagName('html')[0].outerHTML;})();", value -> {
+                    JsonReader reader = new JsonReader(new StringReader(value));
+                    reader.setLenient(true);
+                    StringBuilder content = new StringBuilder();
+                    try {
+                        if (reader.peek() == JsonToken.STRING) {
+                            String html = reader.nextString();
+                            boolean isTranslated = sharedPreferencesRepository.getIsTranslatedView(currentIdInProgress);
+                            if (html != null) {
+                                Article article = new Readability4JExtended(currentLink, html).parse();
+                                if (currentTitle != null) content.append(currentTitle);
+                                if (article.getContentWithUtf8Encoding() != null) {
+                                    Document doc = Jsoup.parse(article.getContentWithUtf8Encoding());
+                                    doc.select("h1").remove();
+                                    doc.select("img").attr("style", "border-radius: 5px; width: 100%; margin-left:0");
+                                    
+                                    List<String> tags = Arrays.asList("h2", "h3", "h4", "h5", "h6", "p", "td", "pre", "th", "li", "figcaption", "blockquote", "section");
+                                    for (Element element : doc.getAllElements()) {
+                                        if (tags.contains(element.tagName())) {
+                                            boolean hasChild = false;
+                                            for (Element child : element.children()) if (tags.contains(child.tagName())) hasChild = true;
+                                            if (!hasChild) {
+                                                String text = element.text().trim();
+                                                if (text.length() > 1) {
+                                                    if (content.length() > 0) content.append(delimiter);
+                                                    content.append(text);
+                                                } else element.remove();
                                             }
-
-                                            if (article.getContentWithUtf8Encoding() != null) {
-                                                Document doc = Jsoup.parse(article.getContentWithUtf8Encoding());
-                                                // ... (all your existing doc.select()... code is correct and remains unchanged)
-                                                doc.select("img").removeAttr("width");
-                                                doc.select("img").removeAttr("height");
-                                                doc.select("img").removeAttr("sizes");
-                                                doc.select("img").removeAttr("srcset");
-                                                doc.select("h1").remove();
-                                                doc.select("img").attr("style", "border-radius: 5px; width: 100%; margin-left:0");
-                                                doc.select("figure").attr("style", "width: 100%; margin-left:0");
-                                                doc.select("iframe").attr("style", "width: 100%; margin-left:0");
-
-                                                List<String> tags = Arrays.asList("h2", "h3", "h4", "h5", "h6", "p", "td", "pre", "th", "li", "figcaption", "blockquote", "section");
-                                                for (Element element : doc.getAllElements()) {
-                                                    if (tags.contains(element.tagName())) {
-                                                        boolean sameContent = false;
-                                                        for (Element child : element.children()) {
-                                                            if (tags.contains(child.tagName())) {
-                                                                sameContent = true;
-                                                            }
-                                                        }
-                                                        if (!sameContent) {
-                                                            String text = element.text().trim();
-                                                            if (!text.isEmpty() && text.length() > 1) {
-                                                                // NEW, CORRECTED LOGIC:
-                                                                // Always add a delimiter *before* adding a new piece of content.
-                                                                // This ensures it's only ever between pieces of text.
-                                                                if (content.length() > 0) {
-                                                                    content.append(delimiter);
-                                                                }
-                                                                content.append(text);
-                                                            } else {
-                                                                element.remove();
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                // --- END OF FIX ---
-
-                                                entryRepository.updateHtml(doc.html(), currentIdInProgress);
-
-                                                if (entryRepository.getOriginalHtmlById(currentIdInProgress) == null) {
-                                                    entryRepository.updateOriginalHtml(doc.html(), currentIdInProgress);
-                                                    entryRepository.updateContent(content.toString(), currentIdInProgress);
-                                                }
-
-                                                if (sharedPreferencesRepository.getAutoTranslate()) {
-                                                    translateHtml(doc.html(), content.toString(), currentIdInProgress, currentTitle);
-                                                }
-
-                                                if (content.toString().isEmpty()) {
-                                                    stopExtracting = true;
-                                                }
-
-                                                if (currentIdInProgress == ttsPlaylist.getPlayingId()) {
-                                                    if (ttsCallback != null) {
-                                                        String lang = currentLanguage != null ? currentLanguage : "en";
-
-                                                        Entry entry = entryRepository.getEntryById(currentIdInProgress);
-                                                        String contentToRead;
-
-                                                        if (isTranslated && entry != null && entry.getTranslated() != null && !entry.getTranslated().trim().isEmpty()) {
-                                                            contentToRead = entry.getTranslated();
-                                                            Log.d(TAG, "[TtsExtractor] Using translated content for TTS");
-                                                        } else {
-                                                            contentToRead = entry != null ? entry.getContent() : "";
-                                                            Log.d(TAG, "[TtsExtractor] Using original content for TTS");
-                                                        }
-
-                                                        ttsCallback.extractToTts(contentToRead, lang);
-                                                        ttsCallback = null;
-                                                    }
-                                                } else {
-                                                    Log.d(TAG, "not playing this ID");
-                                                }
-                                            } else {
-                                                Log.d(TAG, "Empty content");
-                                            }
-                                        } else {
-                                            if (webViewCallback != null) {
-                                                webViewCallback.makeSnackbar("Failed to retrieve the html");
-                                            }
-                                            Log.d(TAG, "No html found!");
-                                        }
-                                    } else {
-                                        Log.e(TAG, "[onReceiveValue] Unexpected JSON token");
-                                        if (webViewCallback != null) {
-                                            webViewCallback.makeSnackbar("Extraction failed");
-                                        }
-                                        Log.d(TAG, "Error peeking reader!");
-                                    }
-                                } catch (Exception e) {
-                                    Log.e(TAG, "[onReceiveValue] Exception during extraction", e);
-                                    failedIds.add(currentIdInProgress);
-                                    Log.d(TAG, e.getMessage() != null ? e.getMessage() : "Unknown exception");
-                                    e.printStackTrace();
-                                } finally {
-                                    Log.d(TAG, "[onReceiveValue] Finally block: resetting flags for ID = " + currentIdInProgress);
-
-                                    if (stopExtracting || content.toString().isEmpty()) {
-                                        Log.w(TAG, "Extraction failed for ID: " + currentIdInProgress);
-                                        if (!failedIds.contains(currentIdInProgress)) {
-                                            failedIds.add(currentIdInProgress);
                                         }
                                     }
-
-                                    if (webViewCallback != null) {
-                                        Log.d(TAG, "Extraction complete. Notifying UI via finishedSetup()");
-                                        webViewCallback.finishedSetup();
-                                        webViewCallback = null;
+                                    entryRepository.updateHtml(doc.html(), currentIdInProgress);
+                                    if (entryRepository.getOriginalHtmlById(currentIdInProgress) == null) {
+                                        entryRepository.updateOriginalHtml(doc.html(), currentIdInProgress);
+                                        entryRepository.updateContent(content.toString(), currentIdInProgress);
                                     }
-
-                                    currentIdInProgress = -1;
-                                    extractionInProgress = false;
-                                    // Call extractAllEntries() without delay from the main thread to ensure proper continuation
-                                    new Handler(Looper.getMainLooper()).post(TtsExtractor.this::extractAllEntries);
                                 }
                             }
-                        });
+                        }
+                    } catch (Exception e) {
+                        failedIds.add(currentIdInProgress);
+                    } finally {
+                        if (webViewCallback != null) {
+                            webViewCallback.finishedSetup();
+                            webViewCallback = null;
+                        }
+                        currentIdInProgress = -1;
+                        extractionInProgress = false;
+                        new Handler(Looper.getMainLooper()).post(TtsExtractor.this::extractAllEntries);
                     }
-                }, delayTime * 1000L);
-            } else {
-                Log.d(TAG, "loading WebView");
+                }), delayTime * 1000L);
             }
         }
     }
 
     public void setCurrentLanguage(String lang, boolean lock) {
-        Log.d("TtsExtractor", "[setCurrentLanguage] REQUESTED lang = " + lang + ", lock = " + lock + " | current = " + currentLanguage + ", isLocked = " + isLockedByTtsPlayer);
-
-        Log.d("TtsExtractor", Log.getStackTraceString(new Throwable()));
-
         if (!isLockedByTtsPlayer || lock) {
-            Log.d("TtsExtractor", "Language set to: " + lang + " | lock=" + lock);
             this.currentLanguage = lang;
             isLockedByTtsPlayer = lock;
-        } else {
-            Log.d("TtsExtractor", "Ignored language override to: " + lang + " due to lock");
         }
-
-        Log.d("TtsExtractor", "Language set to: " + lang + " | lock=" + lock + " | isLocked=" + isLockedByTtsPlayer);
     }
 
     public List<Long> stringToLongList(String genreIds) {
         List<Long> list = new ArrayList<>();
-
         String[] array = genreIds.split(",");
-
-        for (String s : array) {
-            if (!s.isEmpty()) {
-                list.add(Long.parseLong(s));
-            }
-        }
+        for (String s : array) if (!s.isEmpty()) list.add(Long.parseLong(s));
         return list;
     }
 
-    public boolean isLocked() {
-        return isLockedByTtsPlayer;
-    }
-
-    public String getCurrentLanguage() {
-        return currentLanguage;
-    }
+    public boolean isLocked() { return isLockedByTtsPlayer; }
+    public String getCurrentLanguage() { return currentLanguage; }
 }

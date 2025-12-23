@@ -41,6 +41,9 @@ public class AddFeedFragment extends Fragment implements FeedViewModel.AddFeedCa
             new ActivityResultContracts.StartActivityForResult(), result -> {
                 if (result.getResultCode() == Activity.RESULT_OK) {
                     feedViewModel.addNewFeed(feed);
+                } else {
+                    // User cancelled login - show feedback
+                    Snackbar.make(requireView(), R.string.feed_not_added_login_cancelled, Snackbar.LENGTH_SHORT).show();
                 }
             });
 

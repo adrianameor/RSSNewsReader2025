@@ -39,7 +39,7 @@
             app:title="@string/theme_title" />
 
         <SwitchPreferenceCompat
-            app:defaultValue="false"
+            app:defaultValue="true"
             app:icon="@drawable/ic_summary"
             app:key="displaySummary"
             app:summaryOff="@string/display_summary_off"
@@ -65,6 +65,20 @@
             app:summaryOff="@string/highlight_text_off"
             app:summaryOn="@string/highlight_text_on"
             app:title="@string/highlight_text_title" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:layout="@layout/text_preference_category"
+        app:title="@string/ai_features_header">
+
+        <SwitchPreferenceCompat
+            app:defaultValue="true"
+            app:icon="@drawable/ic_auto_mode"
+            app:key="ai_cleaning_enabled"
+            app:summaryOff="@string/ai_cleaning_summary_off"
+            app:summaryOn="@string/ai_cleaning_summary_on"
+            app:title="@string/ai_cleaning_title" />
 
     </PreferenceCategory>
 

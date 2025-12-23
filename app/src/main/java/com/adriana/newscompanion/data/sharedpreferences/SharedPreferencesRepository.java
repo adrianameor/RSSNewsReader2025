@@ -192,4 +192,8 @@ public class SharedPreferencesRepository {
     public int getAiSummaryLength() {
         return sharedPreferences.getInt("ai_summary_length", 200);
     }
+
+    public boolean isAiCleaningEnabled() {
+        return sharedPreferences.getBoolean("ai_cleaning_enabled", true);
+    }
 }

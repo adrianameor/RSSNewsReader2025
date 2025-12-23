@@ -432,4 +432,33 @@ public class EntryRepository {
     public List<Long> getRandomArticleIds(int limit) {
         return entryDao.getRandomArticleIds(limit);
     }
+    public List<Entry> getUncleanedEntries() {
+        return entryDao.getUncleanedEntries();
+    }
+
+    public List<Entry> getUncleanedEntriesPrioritized(long currentReadingId, String sortBy) {
+        // sortBy can be "oldest" or "latest" (NOT "newest")
+        if ("latest".equalsIgnoreCase(sortBy)) {
+            return entryDao.getUncleanedEntriesPrioritizedNewest(currentReadingId);
+        } else {
+            // Default to oldest first
+            return entryDao.getUncleanedEntriesPrioritizedOldest(currentReadingId);
+        }
+    }
+
+    public void markAsAiCleaned(long id) {
+        entryDao.markAsAiCleaned(id);
+    }
+
+    public List<Entry> getUnsummarizedEntriesPrioritized(long currentReadingId, String sortBy) {
+        if ("latest".equalsIgnoreCase(sortBy)) {
+            return entryDao.getUnsummarizedEntriesPrioritizedNewest(currentReadingId);
+        } else {
+            return entryDao.getUnsummarizedEntriesPrioritizedOldest(currentReadingId);
+        }
+    }
+
+    public void markAsAiSummarized(long id, boolean isTranslated) {
+        entryDao.markAsAiSummarized(id, isTranslated);
+    }
 }

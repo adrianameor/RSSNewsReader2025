@@ -38,11 +38,15 @@ public class TranslationRepository {
     }
 
     public Single<String> summarizeText(String originalText, int wordCount) {
+        return summarizeText(originalText, wordCount, null);
+    }
+
+    public Single<String> summarizeText(String originalText, int wordCount, String targetLanguage) {
         if (originalText == null || originalText.trim().isEmpty()) {
             return Single.just("");
         }
 
-        DeepSeekApiService.SummarizeRequest request = new DeepSeekApiService.SummarizeRequest(originalText, wordCount);
+        DeepSeekApiService.SummarizeRequest request = new DeepSeekApiService.SummarizeRequest(originalText, wordCount, targetLanguage);
 
         return deepSeekApiService.summarize("Bearer " + DEEPSEEK_API_KEY, request)
                 .map(response -> {
@@ -53,5 +57,41 @@ public class TranslationRepository {
                     return ""; // Fallback to empty string on failure
                 })
                 .onErrorReturnItem("Error: Could not generate summary."); // Fallback on error
+    }
+
+    public Single<String> cleanArticleHtml(String originalHtml) {
+        if (originalHtml == null || originalHtml.trim().isEmpty()) {
+            return Single.just(originalHtml);
+        }
+
+        DeepSeekApiService.CleanArticleRequest request = new DeepSeekApiService.CleanArticleRequest(originalHtml);
+
+        return deepSeekApiService.cleanArticle("Bearer " + DEEPSEEK_API_KEY, request)
+                .map(response -> {
+                    if (response != null && response.choices != null && !response.choices.isEmpty()) {
+                        String cleanedHtml = response.choices.get(0).message.content;
+                        
+                        if (cleanedHtml != null && !cleanedHtml.trim().isEmpty()) {
+                            // Strip markdown code blocks if present
+                            cleanedHtml = cleanedHtml.trim();
+                            if (cleanedHtml.startsWith("```html")) {
+                                cleanedHtml = cleanedHtml.substring(7); // Remove ```html
+                            } else if (cleanedHtml.startsWith("```")) {
+                                cleanedHtml = cleanedHtml.substring(3); // Remove ```
+                            }
+                            if (cleanedHtml.endsWith("```")) {
+                                cleanedHtml = cleanedHtml.substring(0, cleanedHtml.length() - 3); // Remove trailing ```
+                            }
+                            cleanedHtml = cleanedHtml.trim();
+                            
+                            // Validate it's actually HTML (contains HTML tags)
+                            if (cleanedHtml.contains("<") && cleanedHtml.contains(">")) {
+                                return cleanedHtml;
+                            }
+                        }
+                    }
+                    return originalHtml; // Fallback to original HTML on failure
+                })
+                .onErrorReturnItem(originalHtml); // Fallback on error
     }
 }

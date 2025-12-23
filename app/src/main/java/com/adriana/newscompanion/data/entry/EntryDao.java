@@ -40,48 +40,48 @@ public interface EntryDao {
     @Query("DELETE FROM entry_table WHERE feedId = :feedId")
     Completable deleteByFeedId(long feedId);
 
-    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
+    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, e.isAiCleaned as isAiCleaned, e.summary as summary, e.isAiSummarized as isAiSummarized, e.isAiSummaryTranslated as isAiSummaryTranslated, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
             "FROM entry_table e " +
             "LEFT JOIN feed_table f ON e.feedId = f.id")
     Flowable<List<EntryInfo>> getAllEntriesInfo();
 
-    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
+    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, e.isAiCleaned as isAiCleaned, e.summary as summary, e.isAiSummarized as isAiSummarized, e.isAiSummaryTranslated as isAiSummaryTranslated, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
             "FROM entry_table e " +
             "LEFT JOIN feed_table f ON e.feedId = f.id " +
             "WHERE bookmark = 'Y'")
     Flowable<List<EntryInfo>> getEntriesByBookmark();
 
-    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
+    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, e.isAiCleaned as isAiCleaned, e.summary as summary, e.isAiSummarized as isAiSummarized, e.isAiSummaryTranslated as isAiSummaryTranslated, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
             "FROM entry_table e " +
             "LEFT JOIN feed_table f ON e.feedId = f.id " +
             "WHERE visitedDate is null")
     Flowable<List<EntryInfo>> getEntriesByUnread();
 
-    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
+    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, e.isAiCleaned as isAiCleaned, e.summary as summary, e.isAiSummarized as isAiSummarized, e.isAiSummaryTranslated as isAiSummaryTranslated, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
             "FROM entry_table e " +
             "LEFT JOIN feed_table f ON e.feedId = f.id " +
             "WHERE visitedDate is not null")
     Flowable<List<EntryInfo>> getEntriesByRead();
 
-    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
+    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, e.isAiCleaned as isAiCleaned, e.summary as summary, e.isAiSummarized as isAiSummarized, e.isAiSummaryTranslated as isAiSummaryTranslated, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
             "FROM entry_table e " +
             "LEFT JOIN feed_table f ON e.feedId = f.id " +
             "WHERE bookmark = 'Y' AND e.feedId = :id")
     Flowable<List<EntryInfo>> getEntriesByBookmark(long id);
 
-    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
+    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, e.isAiCleaned as isAiCleaned, e.summary as summary, e.isAiSummarized as isAiSummarized, e.isAiSummaryTranslated as isAiSummaryTranslated, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
             "FROM entry_table e " +
             "LEFT JOIN feed_table f ON e.feedId = f.id " +
             "WHERE visitedDate is null AND e.feedId = :id")
     Flowable<List<EntryInfo>> getEntriesByUnread(long id);
 
-    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
+    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, e.isAiCleaned as isAiCleaned, e.summary as summary, e.isAiSummarized as isAiSummarized, e.isAiSummaryTranslated as isAiSummaryTranslated, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
             "FROM entry_table e " +
             "LEFT JOIN feed_table f ON e.feedId = f.id " +
             "WHERE visitedDate is not null AND e.feedId = :id")
     Flowable<List<EntryInfo>> getEntriesByRead(long id);
 
-    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
+    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, e.isAiCleaned as isAiCleaned, e.summary as summary, e.isAiSummarized as isAiSummarized, e.isAiSummaryTranslated as isAiSummaryTranslated, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
             "FROM entry_table e " +
             "LEFT JOIN feed_table f ON e.feedId = f.id " +
             "WHERE e.feedId = :id")
@@ -90,7 +90,7 @@ public interface EntryDao {
     @Query("UPDATE entry_table SET summary = :summary WHERE id = :id")
     void updateSummary(String summary, long id);
 
-    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
+    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, e.isAiCleaned as isAiCleaned, e.summary as summary, e.isAiSummarized as isAiSummarized, e.isAiSummaryTranslated as isAiSummaryTranslated, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
             "FROM entry_table e " +
             "LEFT JOIN feed_table f ON e.feedId = f.id " +
             "ORDER BY e.publishedDate DESC")
@@ -102,7 +102,7 @@ public interface EntryDao {
             "WHERE f.id = :id")
     List<Entry> getStaticEntriesByFeed(long id);
 
-    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
+    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, e.isAiCleaned as isAiCleaned, e.summary as summary, e.isAiSummarized as isAiSummarized, e.isAiSummaryTranslated as isAiSummaryTranslated, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
             "FROM entry_table e " +
             "LEFT JOIN feed_table f ON e.feedId = f.id " +
             "WHERE e.id = :id")
@@ -225,7 +225,7 @@ public interface EntryDao {
     @Query("UPDATE entry_table SET translated = :translated WHERE id = :id")
     void updateTranslatedText(String translated, long id);
 
-    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
+    @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, e.isAiCleaned as isAiCleaned, e.summary as summary, e.isAiSummarized as isAiSummarized, e.isAiSummaryTranslated as isAiSummaryTranslated, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
             "FROM entry_table e " +
             "LEFT JOIN feed_table f ON e.feedId = f.id " +
             "WHERE e.translated_title IS NULL OR e.translated_summary IS NULL")
@@ -248,4 +248,33 @@ public interface EntryDao {
 
     @Query("SELECT id FROM entry_table ORDER BY RANDOM() LIMIT :limit")
     List<Long> getRandomArticleIds(int limit);
+
+    @Query("SELECT * FROM entry_table WHERE html IS NOT NULL AND isAiCleaned = 0")
+    List<Entry> getUncleanedEntries();
+
+    @Query("SELECT * FROM entry_table WHERE html IS NOT NULL AND isAiCleaned = 0 " +
+            "ORDER BY CASE WHEN id = :currentReadingId THEN 0 ELSE 1 END, " +
+            "publishedDate DESC")
+    List<Entry> getUncleanedEntriesPrioritizedNewest(long currentReadingId);
+
+    @Query("SELECT * FROM entry_table WHERE html IS NOT NULL AND isAiCleaned = 0 " +
+            "ORDER BY CASE WHEN id = :currentReadingId THEN 0 ELSE 1 END, " +
+            "publishedDate ASC")
+    List<Entry> getUncleanedEntriesPrioritizedOldest(long currentReadingId);
+
+    @Query("UPDATE entry_table SET isAiCleaned = 1 WHERE id = :id")
+    void markAsAiCleaned(long id);
+
+    @Query("SELECT * FROM entry_table WHERE html IS NOT NULL AND isAiSummarized = 0 " +
+            "ORDER BY CASE WHEN id = :currentReadingId THEN 0 ELSE 1 END, " +
+            "publishedDate DESC")
+    List<Entry> getUnsummarizedEntriesPrioritizedNewest(long currentReadingId);
+
+    @Query("SELECT * FROM entry_table WHERE html IS NOT NULL AND isAiSummarized = 0 " +
+            "ORDER BY CASE WHEN id = :currentReadingId THEN 0 ELSE 1 END, " +
+            "publishedDate ASC")
+    List<Entry> getUnsummarizedEntriesPrioritizedOldest(long currentReadingId);
+
+    @Query("UPDATE entry_table SET isAiSummarized = 1, isAiSummaryTranslated = :isTranslated WHERE id = :id")
+    void markAsAiSummarized(long id, boolean isTranslated);
 }

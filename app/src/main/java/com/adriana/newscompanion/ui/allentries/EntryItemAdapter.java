@@ -215,7 +215,8 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
             String content = entryInfo.getContent();
             int priority = entryInfo.getPriority();
             boolean hasOriginalHtml   = !TextUtils.isEmpty(entryInfo.getOriginalHtml());
-            // THIS IS THE FIX: The definition of "translated" now also requires the title to be present.
+            boolean isAiCleaned = entryInfo.isAiCleaned();
+            // The definition of "translated" now also requires the title to be present.
             boolean hasTranslatedHtml = (!TextUtils.isEmpty(entryInfo.getHtml())
                     && (entryInfo.getOriginalHtml() == null ||
                     !entryInfo.getHtml().equals(entryInfo.getOriginalHtml())))
@@ -223,24 +224,44 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
             statusView.setText("");
 
             if (autoTranslateEnabled) {
-                if (hasTranslatedHtml) {
+                // Green: Fully processed (AI-cleaned + translated)
+                if (hasTranslatedHtml && isAiCleaned) {
                     statusView.setBackgroundResource(R.drawable.status_dot_green);
                     statusView.setVisibility(View.VISIBLE);
-                } else if (hasOriginalHtml) {
+                }
+                // Blue: AI-cleaned but not yet translated
+                else if (isAiCleaned && hasOriginalHtml) {
+                    statusView.setBackgroundResource(R.drawable.status_dot_blue);
+                    statusView.setVisibility(View.VISIBLE);
+                }
+                // Yellow: Readability4J extracted but not AI-cleaned
+                else if (hasOriginalHtml) {
                     statusView.setBackgroundResource(R.drawable.status_dot_yellow);
                     statusView.setVisibility(View.VISIBLE);
-                }else {
+                }
+                // Red: No content extracted yet
+                else {
                     statusView.setBackgroundResource(R.drawable.status_dot_red);
                     statusView.setVisibility(View.VISIBLE);
                 }
             } else {
-                if (content != null && !content.isEmpty()) {
+                // Green: AI-cleaned (when auto-translate is off)
+                if (isAiCleaned && hasOriginalHtml) {
                     statusView.setBackgroundResource(R.drawable.status_dot_green);
                     statusView.setVisibility(View.VISIBLE);
-                } else if (hasOriginalHtml && priority > 0) {
+                }
+                // Blue: Readability4J extracted but not AI-cleaned
+                else if (hasOriginalHtml) {
+                    statusView.setBackgroundResource(R.drawable.status_dot_blue);
+                    statusView.setVisibility(View.VISIBLE);
+                }
+                // Yellow: In extraction queue
+                else if (priority > 0) {
                     statusView.setBackgroundResource(R.drawable.status_dot_yellow);
                     statusView.setVisibility(View.VISIBLE);
-                } else {
+                }
+                // Red: No content extracted yet
+                else {
                     statusView.setBackgroundResource(R.drawable.status_dot_red);
                     statusView.setVisibility(View.VISIBLE);
                 }

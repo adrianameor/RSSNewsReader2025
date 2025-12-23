@@ -22,6 +22,9 @@
     <string name="sync_header">Sync</string>
     <string name="ai_summary_length_summary">Set the approximate word count for AI summaries.</string>
     <string name="ai_features_header">AI Features</string>
+    <string name="ai_cleaning_title">Enable AI Article Cleaning</string>
+    <string name="ai_cleaning_summary_on">AI will automatically remove clutter (ads, paywalls, etc.) from articles.</string>
+    <string name="ai_cleaning_summary_off">AI article cleaning is disabled.</string>
     <string name="ai_summarization_title">Enable AI Summarization</string>
     <string name="ai_summarization_summary_on">AI will generate a summary for articles.</string>
     <string name="ai_summarization_summary_off">AI summarization is disabled.</string>
@@ -112,6 +115,7 @@
     <string name="login_complete_message">If "Yes", your new feed will be added to the database. If "No", you will continue to stay in this page.</string>
     <string name="login_request_confirmation">Does this news feed require a login account?</string>
     <string name="login_complete_confirmation">Done signing in?</string>
+    <string name="feed_not_added_login_cancelled">Feed not added - login was cancelled</string>
     <string name="no">No</string>
 
     <!-- Bottom Filter Dialog -->

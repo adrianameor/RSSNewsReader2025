@@ -44,6 +44,19 @@ public class Entry {
     @ColumnInfo(name = "translated_summary")
     private String translatedSummary;
 
+    @Nullable
+    @ColumnInfo(name = "summary")
+    private String summary;
+
+    @ColumnInfo(defaultValue = "0")
+    private boolean isAiCleaned;
+
+    @ColumnInfo(defaultValue = "0")
+    private boolean isAiSummarized;
+
+    @ColumnInfo(defaultValue = "0")
+    private boolean isAiSummaryTranslated;
+
     public Entry(long feedId, String title, String link, String description, String imageUrl, String category, Date publishedDate) {
         this.feedId = feedId;
         this.title = title;
@@ -217,15 +230,35 @@ public class Entry {
         this.translatedSummary = translatedSummary;
     }
 
-    @Nullable
-    @ColumnInfo(name = "summary")
-    private String summary;
-
     public String getSummary() {
         return summary;
     }
 
     public void setSummary(@Nullable String summary) {
         this.summary = summary;
+    }
+
+    public boolean isAiCleaned() {
+        return isAiCleaned;
+    }
+
+    public void setAiCleaned(boolean aiCleaned) {
+        isAiCleaned = aiCleaned;
+    }
+
+    public boolean isAiSummarized() {
+        return isAiSummarized;
+    }
+
+    public void setAiSummarized(boolean aiSummarized) {
+        isAiSummarized = aiSummarized;
+    }
+
+    public boolean isAiSummaryTranslated() {
+        return isAiSummaryTranslated;
+    }
+
+    public void setAiSummaryTranslated(boolean aiSummaryTranslated) {
+        isAiSummaryTranslated = aiSummaryTranslated;
     }
 }

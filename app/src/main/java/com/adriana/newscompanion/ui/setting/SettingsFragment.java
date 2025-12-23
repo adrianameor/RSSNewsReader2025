@@ -24,6 +24,7 @@ import com.adriana.newscompanion.data.sharedpreferences.SharedPreferencesReposit
 import com.adriana.newscompanion.service.rss.RssWorkManager;
 import com.adriana.newscompanion.service.tts.TtsPlayer;
 import com.adriana.newscompanion.ui.main.MainActivity;
+import com.adriana.newscompanion.util.AiCleaningTrigger;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -69,6 +70,25 @@ public class SettingsFragment extends PreferenceFragmentCompat {
                     if (sharedPreferences.getBoolean(key, false)) {
                         Log.d("SettingsFragment", "Auto-translate enabled. Enqueuing worker now.");
                         rssWorkManager.enqueueRssWorker();
+                    }
+                    break;
+                case "ai_cleaning_enabled":
+                    // When user toggles AI cleaning, trigger it immediately if enabled
+                    if (sharedPreferences.getBoolean(key, false)) {
+                        Log.d("SettingsFragment", "AI Cleaning enabled. Triggering AI Cleaning Worker now.");
+                        AiCleaningTrigger.triggerAiCleaning(requireContext());
+                        Toast.makeText(requireContext(), "AI Cleaning started...", Toast.LENGTH_SHORT).show();
+                    } else {
+                        Log.d("SettingsFragment", "AI Cleaning disabled.");
+                    }
+                    break;
+                case "sortBy":
+                    // When user changes sort order, re-trigger AI cleaning with new priority
+                    if (sharedPreferencesRepository.isAiCleaningEnabled()) {
+                        String newSortOrder = sharedPreferences.getString(key, "oldest");
+                        Log.d("SettingsFragment", "Sort order changed to: " + newSortOrder + ". Re-triggering AI Cleaning.");
+                        AiCleaningTrigger.triggerAiCleaning(requireContext());
+                        Toast.makeText(requireContext(), "Re-cleaning articles with new order", Toast.LENGTH_SHORT).show();
                     }
                     break;
                 case "night":

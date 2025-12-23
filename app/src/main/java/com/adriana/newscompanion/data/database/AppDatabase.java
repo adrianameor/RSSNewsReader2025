@@ -20,7 +20,7 @@ import com.adriana.newscompanion.data.playlist.PlaylistDao;
 import javax.inject.Inject;
 import javax.inject.Provider;
 
-@Database(entities = {Feed.class, Entry.class, Playlist.class, History.class}, version = 8)
+@Database(entities = {Feed.class, Entry.class, Playlist.class, History.class}, version = 10)
 @androidx.room.TypeConverters({TypeConverters.class})
 public abstract class AppDatabase extends RoomDatabase {
 
@@ -109,6 +109,21 @@ public abstract class AppDatabase extends RoomDatabase {
         @Override
         public void migrate(@NonNull SupportSQLiteDatabase database) {
             database.execSQL("ALTER TABLE entry_table ADD COLUMN summary TEXT");
+        }
+    };
+
+    public static final Migration MIGRATION_8_9 = new Migration(8, 9) {
+        @Override
+        public void migrate(@NonNull SupportSQLiteDatabase database) {
+            database.execSQL("ALTER TABLE entry_table ADD COLUMN isAiCleaned INTEGER NOT NULL DEFAULT 0");
+        }
+    };
+
+    public static final Migration MIGRATION_9_10 = new Migration(9, 10) {
+        @Override
+        public void migrate(@NonNull SupportSQLiteDatabase database) {
+            database.execSQL("ALTER TABLE entry_table ADD COLUMN isAiSummarized INTEGER NOT NULL DEFAULT 0");
+            database.execSQL("ALTER TABLE entry_table ADD COLUMN isAiSummaryTranslated INTEGER NOT NULL DEFAULT 0");
         }
     };
 

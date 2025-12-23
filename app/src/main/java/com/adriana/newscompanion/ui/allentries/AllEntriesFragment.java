@@ -13,6 +13,7 @@ import android.view.ViewGroup;
 import android.widget.TextView;
 import android.widget.Toast;
 import com.adriana.newscompanion.data.repository.TranslationRepository;
+import com.adriana.newscompanion.util.AiCleaningTrigger;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -497,6 +498,15 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
         }
         adapter.submitList(sortedEntries);
         entries = sortedEntries;
+        
+        // Trigger AI cleaning with new sort order ONLY if enabled
+        if (sharedPreferencesRepository.isAiCleaningEnabled()) {
+            Log.d(TAG, "Sort order changed to: " + sort + ". AI Cleaning is enabled. Triggering worker.");
+            AiCleaningTrigger.triggerAiCleaning(requireContext());
+            Toast.makeText(requireContext(), "Re-cleaning articles with new order", Toast.LENGTH_SHORT).show();
+        } else {
+            Log.d(TAG, "Sort order changed to: " + sort + ". AI Cleaning is disabled. Not triggering.");
+        }
     }
 
 

@@ -40,6 +40,8 @@ public class EntryInfo {
     public String translatedSummary;
     public String targetTranslationLanguage;
     public String translated;
+    private String summary;
+    private boolean isAiCleaned;
 
     @Ignore
     public EntryInfo(String entryTitle, String entryLink, String entryDescription, String entryImageUrl, String entryCategory, Date entryPublishedDate, Date visitedDate, String bookmark, long feedId, float ttsSpeechRate, String feedLanguage, String feedTitle, String feedImageUrl) {
@@ -284,4 +286,26 @@ public class EntryInfo {
         this.translated = translated;
     }
 
+    public boolean isAiCleaned() {
+        return isAiCleaned;
+    }
+
+    public void setAiCleaned(boolean aiCleaned) {
+        isAiCleaned = aiCleaned;
+    }
+
+    private boolean isAiSummarized;
+    private boolean isAiSummaryTranslated;
+
+    public boolean isAiSummarized() { return isAiSummarized; }
+    public void setAiSummarized(boolean aiSummarized) { isAiSummarized = aiSummarized; }
+    public boolean isAiSummaryTranslated() { return isAiSummaryTranslated; }
+    public void setAiSummaryTranslated(boolean aiSummaryTranslated) { isAiSummaryTranslated = aiSummaryTranslated; }
+    public String getSummary() {
+        return summary;
+    }
+
+    public void setSummary(String summary) {
+        this.summary = summary;
+    }
 }
