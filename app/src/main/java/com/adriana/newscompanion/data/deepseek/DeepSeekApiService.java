@@ -37,10 +37,10 @@ public interface DeepSeekApiService {
             String prompt;
             if (isHtml) {
                 prompt = String.format(Locale.US,
-                        "You are an expert HTML translator. Translate the text content within the following HTML from %s to %s. " +
-                                "Crucially, do not change any HTML tags or their attributes. Maintain the original HTML structure perfectly. " +
-                                "Only translate the human-readable text between the tags. Do not translate proper nouns or technical terms. " +
-                                "Only provide the translated HTML, with no additional explanations or introductions. Here is the HTML to translate:\n\n%s",
+                        "You are an expert HTML translator. Translate all human-readable text content within the following HTML from %s to %s. " +
+                                "This includes article body text, headings, and crucially, all image captions (figcaption or caption tags). " +
+                                "Do not change any HTML tags or their attributes. Maintain the original HTML structure perfectly. " +
+                                "Only provide the translated HTML, with no additional explanations. Here is the HTML to translate:\n\n%s",
                         sourceLang, targetLang, textToTranslate
                 );
             } else {
