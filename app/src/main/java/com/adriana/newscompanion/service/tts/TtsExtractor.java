@@ -148,8 +148,6 @@ public class TtsExtractor {
                 }, 30000);
             }
         } else {
-            // --- ALL EXTRACTIONS FINISHED ---
-            // This is the point where we trigger the AI Chain!
             Log.d(TAG, "Extraction finished. Triggering Unique AI Pipeline Chain...");
             triggerAiPipelineChain();
         }
@@ -157,19 +155,14 @@ public class TtsExtractor {
 
     private void triggerAiPipelineChain() {
         WorkManager workManager = WorkManager.getInstance(context);
-        
-        // FIX: Use Unique Work with REPLACE policy to kill any old "ghost" tasks
-        // and ensure articles 1 & 2 are processed in the strict new order.
         String uniqueWorkName = "AI_CONTENT_PIPELINE";
         WorkContinuation continuation = null;
 
-        // 1. PHASE 1: SUMMARIZE (Absolute Priority)
         if (sharedPreferencesRepository.isSummarizationEnabled()) {
             OneTimeWorkRequest task = new OneTimeWorkRequest.Builder(AiSummarizationWorker.class).build();
             continuation = workManager.beginUniqueWork(uniqueWorkName, ExistingWorkPolicy.REPLACE, task);
         }
 
-        // 2. PHASE 2: CLEAN
         if (sharedPreferencesRepository.isAiCleaningEnabled()) {
             OneTimeWorkRequest task = new OneTimeWorkRequest.Builder(AiCleaningWorker.class).build();
             if (continuation == null) {
@@ -179,7 +172,6 @@ public class TtsExtractor {
             }
         }
 
-        // 3. PHASE 3: TRANSLATE
         if (sharedPreferencesRepository.getAutoTranslate()) {
             OneTimeWorkRequest task = new OneTimeWorkRequest.Builder(TranslationWorker.class).build();
             if (continuation == null) {
@@ -191,7 +183,7 @@ public class TtsExtractor {
 
         if (continuation != null) {
             continuation.enqueue();
-            Log.d(TAG, "Strict AI Pipeline enqueued. Existing tasks replaced.");
+            Log.d(TAG, "Strict AI Pipeline enqueued.");
         }
     }
 
@@ -238,9 +230,18 @@ public class TtsExtractor {
                                 if (currentTitle != null) content.append(currentTitle);
                                 if (article.getContentWithUtf8Encoding() != null) {
                                     Document doc = Jsoup.parse(article.getContentWithUtf8Encoding());
+                                    
+                                    // --- THE FIX: RESTORE IMAGE WIDTH LOGIC ---
+                                    doc.select("img").removeAttr("width");
+                                    doc.select("img").removeAttr("height");
+                                    doc.select("img").removeAttr("sizes");
+                                    doc.select("img").removeAttr("srcset");
                                     doc.select("h1").remove();
                                     doc.select("img").attr("style", "border-radius: 5px; width: 100%; margin-left:0");
-                                    
+                                    doc.select("figure").attr("style", "width: 100%; margin-left:0");
+                                    doc.select("iframe").attr("style", "width: 100%; margin-left:0");
+                                    // ------------------------------------------
+
                                     List<String> tags = Arrays.asList("h2", "h3", "h4", "h5", "h6", "p", "td", "pre", "th", "li", "figcaption", "blockquote", "section");
                                     for (Element element : doc.getAllElements()) {
                                         if (tags.contains(element.tagName())) {

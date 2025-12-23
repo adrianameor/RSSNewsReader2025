@@ -145,7 +145,7 @@ public class WebViewViewModel extends ViewModel {
         return "<style>\n" +
                 "    @font-face {\n" +
                 "        font-family: open_sans;\n" +
-                "        src: url(\\\"file:///android_res/font/open_sans.ttf\\\")\n" +
+                "        src: url(\"file:///android_res/font/open_sans.ttf\")\n" +
                 "    }\n" +
                 "    body {\n" +
                 "        font-family: open_sans;\n" +
@@ -366,9 +366,7 @@ public class WebViewViewModel extends ViewModel {
     public void summarizeArticle(long entryId) {
         Entry entry = entryRepository.getEntryById(entryId);
 
-        // 1. Check if a summary already exists in the database.
         if (entry != null && entry.getSummary() != null && !entry.getSummary().isEmpty()) {
-            // If it exists, use the cached summary and skip the API call.
             summaryResult.setValue(entry.getSummary());
             android.util.Log.d("WebViewViewModel", "Used cached summary for entry ID: " + entryId);
             return;
@@ -396,9 +394,7 @@ public class WebViewViewModel extends ViewModel {
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(
                         summary -> {
-                            // 2. After getting the summary, save it to the database.
                             entryRepository.updateSummary(summary, entryId);
-
                             summaryResult.setValue(summary);
                             isSummarizing.setValue(false);
                         },
