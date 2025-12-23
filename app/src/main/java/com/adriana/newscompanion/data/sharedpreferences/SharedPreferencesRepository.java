@@ -68,7 +68,8 @@ public class SharedPreferencesRepository {
     }
 
     public String getSortBy() {
-        return sharedPreferences.getString("sortBy", "oldest");
+        // CHANGED: Default value from "oldest" to "latest"
+        return sharedPreferences.getString("sortBy", "latest");
     }
 
     public int getConfidenceThreshold() {

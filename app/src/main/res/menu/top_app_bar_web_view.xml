@@ -11,8 +11,8 @@
     <item
         android:id="@+id/summarize"
         android:icon="@drawable/ic_summary"
-        android:title="Summarize"
-        android:contentDescription="Summarize Article"
+        android:title="Show Summary"
+        android:contentDescription="Show Summary"
         android:visible="false"
         app:showAsAction="always" />
 

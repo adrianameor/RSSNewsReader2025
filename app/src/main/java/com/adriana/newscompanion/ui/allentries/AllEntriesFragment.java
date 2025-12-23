@@ -338,11 +338,23 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
 
     @Override
     public void onSortChange(String sort) {
+        this.sortBy = sort;
         allEntriesViewModel.setSortBy(sort);
-        sortBy = sort;
-        if (sharedPreferencesRepository.isAiCleaningEnabled()) AiCleaningTrigger.triggerAiCleaning(requireContext());
-    }
 
+        List<EntryInfo> currentEntries = new ArrayList<>(entries);
+        if (sort.equals("oldest")) {
+            Collections.sort(currentEntries, new EntryInfo.OldestComparator());
+        } else {
+            Collections.sort(currentEntries, new EntryInfo.LatestComparator());
+        }
+
+        adapter.submitList(currentEntries);
+        entries = currentEntries;
+
+        if (sharedPreferencesRepository.isAiCleaningEnabled()) {
+            AiCleaningTrigger.triggerAiCleaning(requireContext());
+        }
+    }
 
     @Override
     public void onPlayingButtonClick(long entryId) {
