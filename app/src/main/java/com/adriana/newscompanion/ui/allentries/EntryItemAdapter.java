@@ -61,7 +61,6 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
             boolean sameBookmark = java.util.Objects.equals(oldE.getBookmark(), newE.getBookmark());
             boolean sameVisited  = java.util.Objects.equals(oldE.getVisitedDate(), newE.getVisitedDate());
             
-            // Add AI state checks to ensure UI updates when background workers finish
             boolean sameAiState = oldE.isAiCleaned() == newE.isAiCleaned() &&
                                  oldE.isAiSummarized() == newE.isAiSummarized() &&
                                  oldE.isAiSummaryTranslated() == newE.isAiSummaryTranslated() &&
@@ -190,7 +189,6 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
                 return true;
             });
 
-            // --- CIRCLE COLOR LOGIC IMPLEMENTATION ---
             statusView.setVisibility(View.VISIBLE);
             
             boolean hasReadability = !TextUtils.isEmpty(entryInfo.getOriginalHtml());
@@ -199,7 +197,11 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
             boolean isAiSummaryTranslated = entryInfo.isAiSummaryTranslated();
             boolean hasFullTranslation = !TextUtils.isEmpty(entryInfo.getTranslated()) && entryInfo.getTranslated().contains("--####--");
 
-            // Scenario 8: ALL ON
+            // --- FIX FOR WRONG YELLOW COLOR ---
+            // Yellow should only show if extraction is actually progress (isLoading flag)
+            // or if it's queued (priority > 0) but readability isn't done yet.
+            boolean isQueued = entryInfo.getPriority() > 0 && !hasReadability;
+
             if (autoTranslateEnabled && summarizationEnabled && aiCleaningEnabled) {
                 if (hasFullTranslation && isAiCleaned && isAiSummarized && isAiSummaryTranslated) {
                     statusView.setBackgroundResource(R.drawable.status_dot_green);
@@ -213,7 +215,6 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
                     statusView.setBackgroundResource(R.drawable.status_dot_red);
                 }
             }
-            // Scenario 5: Auto Translate + Summarization
             else if (autoTranslateEnabled && summarizationEnabled) {
                 if (hasFullTranslation && isAiSummarized && isAiSummaryTranslated) {
                     statusView.setBackgroundResource(R.drawable.status_dot_green);
@@ -225,7 +226,6 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
                     statusView.setBackgroundResource(R.drawable.status_dot_red);
                 }
             }
-            // Scenario 6: Auto Translate + AI Cleaned
             else if (autoTranslateEnabled && aiCleaningEnabled) {
                 if (hasFullTranslation && isAiCleaned) {
                     statusView.setBackgroundResource(R.drawable.status_dot_green);
@@ -237,7 +237,6 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
                     statusView.setBackgroundResource(R.drawable.status_dot_red);
                 }
             }
-            // Scenario 7: Summarization + AI Cleaned
             else if (summarizationEnabled && aiCleaningEnabled) {
                 if (isAiSummarized && isAiCleaned) {
                     statusView.setBackgroundResource(R.drawable.status_dot_green);
@@ -249,7 +248,6 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
                     statusView.setBackgroundResource(R.drawable.status_dot_red);
                 }
             }
-            // Scenario 2: Auto Translate Only
             else if (autoTranslateEnabled) {
                 if (hasFullTranslation) {
                     statusView.setBackgroundResource(R.drawable.status_dot_green);
@@ -259,7 +257,6 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
                     statusView.setBackgroundResource(R.drawable.status_dot_red);
                 }
             }
-            // Scenario 3: Summarization Only
             else if (summarizationEnabled) {
                 if (isAiSummarized) {
                     statusView.setBackgroundResource(R.drawable.status_dot_green);
@@ -269,7 +266,6 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
                     statusView.setBackgroundResource(R.drawable.status_dot_red);
                 }
             }
-            // Scenario 4: AI Cleaned Only
             else if (aiCleaningEnabled) {
                 if (isAiCleaned) {
                     statusView.setBackgroundResource(R.drawable.status_dot_green);
@@ -279,11 +275,11 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
                     statusView.setBackgroundResource(R.drawable.status_dot_red);
                 }
             }
-            // Scenario 1: All OFF
+            // Scenario 1: All OFF (Fix: Red if not loaded, Green if readability done)
             else {
                 if (hasReadability) {
                     statusView.setBackgroundResource(R.drawable.status_dot_green);
-                } else if (entryInfo.getPriority() > 0) {
+                } else if (isQueued) {
                     statusView.setBackgroundResource(R.drawable.status_dot_yellow);
                 } else {
                     statusView.setBackgroundResource(R.drawable.status_dot_red);
