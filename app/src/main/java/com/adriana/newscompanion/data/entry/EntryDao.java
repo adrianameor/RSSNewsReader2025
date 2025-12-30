@@ -201,7 +201,7 @@ public interface EntryDao {
     @Query("DELETE FROM entry_table WHERE feedId = :feedId AND id NOT IN (SELECT id FROM entry_table WHERE feedId = :feedId ORDER BY publishedDate DESC LIMIT :limit) AND id NOT IN (SELECT id FROM entry_table WHERE bookmark = 'Y' AND feedId = :feedId)")
     void limitEntriesByFeed(long feedId, int limit);
 
-    @Query("UPDATE entry_table SET priority = 1 WHERE content IS NULL AND priority = 0")
+    @Query("UPDATE entry_table SET priority = 1 WHERE html IS NULL")
     void requeueMissingEntries();
 
     @Query("SELECT * FROM entry_table WHERE id = :id")

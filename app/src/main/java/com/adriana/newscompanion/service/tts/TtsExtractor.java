@@ -82,7 +82,11 @@ public class TtsExtractor {
     private final List<Long> failedIds = new ArrayList<>();
     private final HashMap<Long, Integer> retryCountMap = new HashMap<>();
     private final int MAX_RETRIES = 3;
-    private long lastExtractStart = 0;
+    
+    // Improved Watchdog
+    private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
+    private Runnable watchdogRunnable;
+    private int loadCounter = 0;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Inject
@@ -95,23 +99,38 @@ public class TtsExtractor {
         this.textUtil = textUtil;
         this.sharedPreferencesRepository = sharedPreferencesRepository;
 
-        ContextCompat.getMainExecutor(context).execute(new Runnable() {
-            @Override
-            public void run() {
-                webView = new WebView(context);
-                webView.setWebViewClient(new WebClient());
-                webView.clearCache(true);
-                webView.getSettings().setJavaScriptEnabled(true);
-                webView.getSettings().setDomStorageEnabled(true);
+        initWebView();
+    }
+
+    private void initWebView() {
+        ContextCompat.getMainExecutor(context).execute(() -> {
+            if (webView != null) {
+                webView.destroy();
             }
+            webView = new WebView(context);
+            webView.setWebViewClient(new WebClient());
+            webView.clearCache(true);
+            webView.getSettings().setJavaScriptEnabled(true);
+            webView.getSettings().setDomStorageEnabled(true);
+            Log.d(TAG, "WebView Engine Re-Initialized.");
         });
     }
 
     public void extractAllEntries() {
-        Log.d(TAG, "extractAllEntries | InProgress: " + extractionInProgress + " | ID: " + currentIdInProgress);
+        Log.d(TAG, "extractAllEntries | extractionInProgress: " + extractionInProgress);
 
-        if (extractionInProgress && currentIdInProgress == -1) {
-            extractionInProgress = false;
+        if (extractionInProgress) {
+            return;
+        }
+
+        // RECYCLING LOGIC: Refresh WebView every 20 articles to prevent stalling
+        if (loadCounter >= 20) {
+            Log.d(TAG, "Recycling WebView engine after 20 loads...");
+            loadCounter = 0;
+            initWebView();
+            // Wait a short moment for the new WebView to be ready before continuing
+            new Handler(Looper.getMainLooper()).postDelayed(this::extractAllEntries, 2000);
+            return;
         }
 
         Entry entry = entryRepository.getEmptyContentEntry();
@@ -125,41 +144,55 @@ public class TtsExtractor {
                 Log.d(TAG, "Retrying stuck article ID: " + retryId + " (Attempt " + (attempts + 1) + ")");
                 entry = entryRepository.getEntryById(retryId);
             } else {
-                Log.w(TAG, "Max retries reached for ID: " + retryId + ". Giving up.");
+                Log.w(TAG, "Max retries reached for ID: " + retryId + ". Skipping.");
                 extractAllEntries();
                 return;
             }
         }
 
         if (entry != null) {
-            if (!extractionInProgress) {
-                extractionInProgress = true;
-                currentIdInProgress = entry.getId();
-                currentLink = entry.getLink();
-                currentTitle = entry.getTitle();
-                delayTime = feedRepository.getDelayTimeById(entry.getFeedId());
-                
-                Log.d(TAG, "--- STARTING EXTRACTION ---");
-                Log.d(TAG, "ID: " + currentIdInProgress + " | Title: " + currentTitle);
-                Log.d(TAG, "URL: " + currentLink);
-                
-                ContextCompat.getMainExecutor(context).execute(() -> webView.loadUrl(currentLink));
-                lastExtractStart = System.currentTimeMillis();
+            extractionInProgress = true;
+            currentIdInProgress = entry.getId();
+            currentLink = entry.getLink();
+            currentTitle = entry.getTitle();
+            delayTime = feedRepository.getDelayTimeById(entry.getFeedId());
+            loadCounter++;
 
-                new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                    if (extractionInProgress && System.currentTimeMillis() - lastExtractStart > 45000) {
-                        Log.e(TAG, "!!! WATCHDOG TIMEOUT !!! Article ID: " + currentIdInProgress + " took >45s. Resetting.");
-                        failedIds.add(currentIdInProgress);
-                        currentIdInProgress = -1;
-                        extractionInProgress = false;
-                        extractAllEntries();
-                    }
-                }, 45000);
-            }
+            Log.d(TAG, "--- STARTING EXTRACTION [" + loadCounter + "/20] ---");
+            Log.d(TAG, "ID: " + currentIdInProgress + " | Title: " + currentTitle);
+            
+            ContextCompat.getMainExecutor(context).execute(() -> webView.loadUrl(currentLink));
+            
+            startWatchdog(45000); // 45 second timeout
         } else {
-            Log.d(TAG, "All work finished. Triggering AI Pipeline.");
+            Log.d(TAG, "Queue empty. All extractions finished.");
             triggerAiPipelineChain();
         }
+    }
+
+    private void startWatchdog(long timeout) {
+        cancelWatchdog();
+        watchdogRunnable = () -> {
+            if (extractionInProgress) {
+                Log.e(TAG, "!!! WATCHDOG TIMEOUT !!! Article ID: " + currentIdInProgress + " stalled. Skipping to next.");
+                failedIds.add(currentIdInProgress);
+                resetFlagsAndContinue();
+            }
+        };
+        watchdogHandler.postDelayed(watchdogRunnable, timeout);
+    }
+
+    private void cancelWatchdog() {
+        if (watchdogRunnable != null) {
+            watchdogHandler.removeCallbacks(watchdogRunnable);
+            watchdogRunnable = null;
+        }
+    }
+
+    private void resetFlagsAndContinue() {
+        currentIdInProgress = -1;
+        extractionInProgress = false;
+        new Handler(Looper.getMainLooper()).post(this::extractAllEntries);
     }
 
     private void triggerAiPipelineChain() {
@@ -221,12 +254,12 @@ public class TtsExtractor {
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
             
-            // Requirement 4.3: Redirect Check
+            // Redirect Guard
             if (url != null && currentLink != null) {
                 Uri expected = Uri.parse(currentLink);
                 Uri actual = Uri.parse(url);
-                if (!expected.getHost().equalsIgnoreCase(actual.getHost())) {
-                    Log.w(TAG, "[Intelligent Check] Redirect Detected! Target: " + actual.getHost() + " | Expected: " + expected.getHost());
+                if (!expected.getHost().equalsIgnoreCase(actual.getHost()) && !actual.getHost().contains(expected.getHost())) {
+                    Log.w(TAG, "[Intelligent Guard] Redirect detected: " + actual.getHost());
                 }
             }
 
@@ -234,7 +267,7 @@ public class TtsExtractor {
                 handler.postDelayed(() -> webView.evaluateJavascript("(function() {return document.getElementsByTagName('html')[0].outerHTML;})();", value -> {
                     JsonReader reader = new JsonReader(new StringReader(value));
                     reader.setLenient(true);
-                    StringBuilder contentTextCollector = new StringBuilder();
+                    StringBuilder contentCollector = new StringBuilder();
                     try {
                         if (reader.peek() == JsonToken.STRING) {
                             String html = reader.nextString();
@@ -242,13 +275,8 @@ public class TtsExtractor {
                                 Readability4JExtended readability4J = new Readability4JExtended(currentLink, html);
                                 Article article = readability4J.parse();
                                 
-                                String pageTitle = article.getTitle();
-                                Log.d(TAG, "[Intelligent Check] Page Title: " + pageTitle + " | RSS Title: " + currentTitle);
-
                                 if (article.getContentWithUtf8Encoding() != null) {
                                     Document doc = Jsoup.parse(article.getContentWithUtf8Encoding());
-                                    
-                                    doc.select("img").removeAttr("width").removeAttr("height").removeAttr("sizes").removeAttr("srcset");
                                     doc.select("h1").remove();
                                     doc.select("img").attr("style", "border-radius: 5px; width: 100%; margin-left:0");
                                     doc.select("figure").attr("style", "width: 100%; margin-left:0");
@@ -257,25 +285,23 @@ public class TtsExtractor {
                                     List<String> tags = Arrays.asList("h2", "h3", "h4", "h5", "h6", "p", "td", "pre", "th", "li", "figcaption", "blockquote", "section");
                                     for (Element element : doc.getAllElements()) {
                                         if (tags.contains(element.tagName())) {
-                                            boolean hasChild = false;
-                                            for (Element child : element.children()) if (tags.contains(child.tagName())) hasChild = true;
-                                            if (!hasChild) {
+                                            boolean hasTagChild = false;
+                                            for (Element child : element.children()) if (tags.contains(child.tagName())) hasTagChild = true;
+                                            if (!hasTagChild) {
                                                 String text = element.text().trim();
                                                 if (text.length() > 1) {
-                                                    if (contentTextCollector.length() > 0) contentTextCollector.append(delimiter);
-                                                    contentTextCollector.append(text);
+                                                    if (contentCollector.length() > 0) contentCollector.append(delimiter);
+                                                    contentCollector.append(text);
                                                 } else element.remove();
                                             }
                                         }
                                     }
                                     
-                                    // Requirement 4.1: Heuristic Quality Check
-                                    String finalFullText = contentTextCollector.toString();
-                                    Log.d(TAG, "[Heuristic] Extracted Text Length: " + finalFullText.length());
+                                    String finalFullText = contentCollector.toString();
                                     
-                                    if (finalFullText.length() < 250) {
-                                        Log.w(TAG, "[Heuristic] ALERT: Content suspicious or incomplete (Too short). ID: " + currentIdInProgress);
-                                        // Potential failure point - we won't mark as complete yet to trigger a retry
+                                    // Heuristic Check: Is the content actually real?
+                                    if (finalFullText.length() < 200 || finalFullText.toLowerCase().contains("please enable javascript")) {
+                                        Log.w(TAG, "Extraction suspicious (too short or blocked). Flagging for retry.");
                                         failedIds.add(currentIdInProgress);
                                     } else {
                                         entryRepository.updateHtml(doc.html(), currentIdInProgress);
@@ -283,22 +309,21 @@ public class TtsExtractor {
                                             entryRepository.updateOriginalHtml(doc.html(), currentIdInProgress);
                                             entryRepository.updateContent(finalFullText, currentIdInProgress);
                                         }
-                                        Log.d(TAG, "✓ SUCCESS: ID " + currentIdInProgress + " processed successfully.");
+                                        Log.d(TAG, "✓ SUCCESS: ID " + currentIdInProgress + " finished.");
                                     }
                                 }
                             }
                         }
                     } catch (Exception e) {
-                        Log.e(TAG, "!!! EXTRACTION ERROR !!! ID: " + currentIdInProgress, e);
+                        Log.e(TAG, "Eval Error: " + e.getMessage());
                         failedIds.add(currentIdInProgress);
                     } finally {
+                        cancelWatchdog();
                         if (webViewCallback != null) {
                             webViewCallback.finishedSetup();
                             webViewCallback = null;
                         }
-                        currentIdInProgress = -1;
-                        extractionInProgress = false;
-                        new Handler(Looper.getMainLooper()).post(TtsExtractor.this::extractAllEntries);
+                        resetFlagsAndContinue();
                     }
                 }), delayTime * 1000L);
             }

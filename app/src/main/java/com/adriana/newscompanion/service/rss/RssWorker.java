@@ -17,6 +17,9 @@ import com.adriana.newscompanion.service.util.TextUtil;
 import dagger.assisted.Assisted;
 import dagger.assisted.AssistedInject;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+
 @HiltWorker
 public class RssWorker extends Worker {
 
@@ -51,35 +54,55 @@ public class RssWorker extends Worker {
     @Override
     public Result doWork() {
         try {
-            Log.d(TAG, "=== Starting Background Sync and Health Check ===");
+            Log.d(TAG, "=== Sync & Health Check Starting ===");
             
-            // 1. Download new XML data from all RSS feeds
+            // 1. Download new XML articles
             String text = feedRepository.refreshEntries();
-            
-            // 2. Notify the user of new articles
             RssNotification rssNotification = new RssNotification(context);
             rssNotification.sendNotification(text);
 
-            // 3. STUCK QUEUE RECOVERY:
-            // We force-reset the priority for all articles that have NO content.
-            // This ensures that articles from previous days that were interrupted (stuck at Red)
-            // are moved back into the extraction queue (Yellow).
-            Log.d(TAG, "Performing Health Check: Re-queueing stuck entries...");
+            // 2. RECOVERY LOGIC (Requirement 4.2)
+            // Reset any article that is stuck in priority 1 (Yellow) but has no content.
+            // This allows the engine to pick up articles that were missed in previous syncs.
+            Log.d(TAG, "Resetting stuck extraction queue...");
             feedRepository.getEntryRepository().requeueMissingEntries();
             
-            // 4. TRIGGER ENGINE:
-            // Start the TtsExtractor. It will now find both the new articles
-            // and the "stuck" articles we just reset.
+            // 3. PROCESS THE QUEUE
+            // We use a latch to stay alive as long as possible (up to 9 minutes)
+            // to process all 50-60 articles in one go.
             if (feedRepository.getEntryRepository().hasEmptyContentEntries()) {
-                Log.d(TAG, "Empty content entries found. Dispatching extraction engine.");
-                ttsExtractor.extractAllEntries();
-            } else {
-                Log.d(TAG, "No processing needed. All articles complete.");
+                Log.d(TAG, "Starting extraction engine for unprocessed articles.");
+                
+                final CountDownLatch latch = new CountDownLatch(1);
+                
+                new Thread(() -> {
+                    try {
+                        // Keep extracting until the database says we are 100% finished
+                        while (feedRepository.getEntryRepository().hasEmptyContentEntries()) {
+                            // The engine in TtsExtractor now handles its own memory recycling
+                            ttsExtractor.extractAllEntries();
+                            Thread.sleep(10000); // Check progress every 10 seconds
+                        }
+                    } catch (InterruptedException e) {
+                        Log.w(TAG, "Extraction polling interrupted.");
+                    } finally {
+                        latch.countDown();
+                    }
+                }).start();
+
+                // Wait up to 9 minutes. If we don't finish, we return SUCCESS anyway
+                // so that progress is saved and we can resume later.
+                boolean finished = latch.await(9, TimeUnit.MINUTES);
+                if (!finished) {
+                    Log.w(TAG, "Time limit reached (9m). Saving progress for next sync.");
+                } else {
+                    Log.d(TAG, "✓ All articles processed successfully in this sync.");
+                }
             }
 
             return Result.success();
         } catch (Exception e) {
-            Log.e(TAG, "Sync failed: " + e.getMessage());
+            Log.e(TAG, "Worker failed: " + e.getMessage());
             return Result.retry();
         }
     }

@@ -199,11 +199,9 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
         }
     }
 
-    // --- THIS IS THE NEW, SIMPLIFIED, SYNCHRONOUS EXTRACT METHOD ---
     public boolean extract(long currentId, long feedId, String content, String language) {
         Log.d(TAG, "Starting synchronous extract for article: ID=" + currentId);
 
-        // 1. Reset all state flags for the new article.
         this.isPreparing = true;
         this.isArticleFinished = false;
         this.sentenceCounter = 0;
@@ -214,7 +212,6 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
         this.language = language;
         this.hasSpokenAfterSetup = false;
 
-        // Lock the language in the extractor if provided.
         if (language != null && !language.isEmpty()) {
             ttsExtractor.setCurrentLanguage(language, true);
         }
@@ -225,7 +222,6 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
             return false;
         }
 
-        // 2. Perform the sentence splitting logic SYNCHRONOUSLY on the calling thread.
         String[] raw = content.split(Pattern.quote(ttsExtractor.delimiter));
         List<String> sentenceList = new ArrayList<>(raw.length);
         for (String part : raw) {
@@ -248,7 +244,6 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
             }
         }
 
-        // 3. Perform final checks.
         if (this.sentences.size() < 2) {
             Log.w(TAG, "Extracted less than 2 sentences. Considering this a failure.");
             this.sentences.clear();
@@ -260,7 +255,7 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
         this.sentenceCounter = Math.min(savedProgress, Math.max(0, this.sentences.size() - 1));
 
         Log.d(TAG, "Synchronous extract finished. " + this.sentences.size() + " sentences ready. Starting at #" + this.sentenceCounter);
-        isPreparing = false; // Mark preparation as complete.
+        isPreparing = false;
         return true;
     }
 
@@ -335,7 +330,6 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
     }
 
     public void setupTts() {
-        // --- ENHANCED SETUP METHOD WITH BETTER LANGUAGE HANDLING ---
         Log.d(TAG, "setupTts() called.");
         
         if (tts == null) {
@@ -355,15 +349,12 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
 
         try {
             Log.d(TAG, "Setting TTS language to: " + language);
-            
-            // Parse the language code to create a proper Locale
+
             Locale targetLocale;
             if (language.contains("-")) {
-                // Handle language codes like "en-US", "zh-CN"
                 String[] parts = language.split("-");
                 targetLocale = new Locale(parts[0], parts.length > 1 ? parts[1] : "");
             } else {
-                // Handle simple language codes like "en", "ms", "zh"
                 targetLocale = new Locale(language);
             }
             
@@ -372,17 +363,15 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
             if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
                 Log.e(TAG, "Language not supported by TTS engine: " + language + " (" + targetLocale.getDisplayName() + "). Defaulting to English.");
                 tts.setLanguage(Locale.ENGLISH);
-                language = "en"; // Update the stored language to reflect the fallback
+                language = "en";
             } else {
                 Log.d(TAG, "TTS language successfully set to: " + targetLocale.getDisplayName() + " (" + language + ")");
             }
         } catch (Exception e) {
             Log.e(TAG, "Invalid locale provided to TTS engine: " + language, e);
             tts.setLanguage(Locale.ENGLISH);
-            language = "en"; // Update the stored language to reflect the fallback
+            language = "en";
         }
-        // It no longer calls speak() on its own. The service is now in charge of that.
-        // --- END OF ENHANCED METHOD ---
     }
 
     private void identifyLanguage(String sentence, boolean fromService) {
@@ -467,12 +456,11 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
                 String sentence = sentences.get(sentenceCounter);
                 Log.d(TAG, "TTS Speaking [#" + sentenceCounter + "]: " + sentence);
                 int queueMode = isManualSkip ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD;
-                // --- THIS IS PART 1 OF THE FIX ---
-                // Reset the flag immediately after its one-time use.
+
                 if (isManualSkip) {
                     isManualSkip = false;
                 }
-                // --- END OF FIX ---
+
                 tts.speak(sentence, queueMode, null, TextToSpeech.ACTION_TTS_QUEUE_PROCESSING_COMPLETED);
                 setUiControlPlayback(true);
                 setNewState(PlaybackStateCompat.STATE_PLAYING);
@@ -504,7 +492,7 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
             isManualSkip = true;
             sentenceCounter--;
             entryRepository.updateSentCount(sentenceCounter, currentId);
-            tts.stop(); // interrupt current sentence
+            tts.stop();
             speak();
         }
     }
@@ -710,18 +698,12 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
     public int getCurrentExtractProgress() {
         return currentExtractProgress;
     }
-    // --- THIS IS PART 2 OF THE FIX ---
-    /**
-     * Resets all state flags to prepare for a completely new article.
-     * This is called by the TtsService before starting a new track.
-     */
+
     public void resetStateForNewArticle() {
         Log.d(TAG, "Resetting player state for new article.");
         this.isArticleFinished = false;
         this.sentenceCounter = 0;
         this.isManualSkip = false;
-        this.sentences.clear(); // Clear out old sentence data
+        this.sentences.clear();
     }
-    // --- END OF FIX ---
-
 }
