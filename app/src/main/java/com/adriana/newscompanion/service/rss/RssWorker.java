@@ -51,23 +51,35 @@ public class RssWorker extends Worker {
     @Override
     public Result doWork() {
         try {
-            Log.d(TAG, "Starting RSS refresh...");
+            Log.d(TAG, "=== Starting Background Sync and Health Check ===");
+            
+            // 1. Download new XML data from all RSS feeds
             String text = feedRepository.refreshEntries();
+            
+            // 2. Notify the user of new articles
             RssNotification rssNotification = new RssNotification(context);
             rssNotification.sendNotification(text);
 
-            // 1. Initial Extraction (Readability4J)
-            // This process is asynchronous. It will turn the circle YELLOW.
+            // 3. STUCK QUEUE RECOVERY:
+            // We force-reset the priority for all articles that have NO content.
+            // This ensures that articles from previous days that were interrupted (stuck at Red)
+            // are moved back into the extraction queue (Yellow).
+            Log.d(TAG, "Performing Health Check: Re-queueing stuck entries...");
             feedRepository.getEntryRepository().requeueMissingEntries();
             
-            // The AI Pipeline Chain (Summarize -> Clean -> Translate) is now 
-            // automatically triggered by the TtsExtractor once all extractions finish.
-            // This prevents the AI workers from starting before the HTML content exists.
-            ttsExtractor.extractAllEntries();
+            // 4. TRIGGER ENGINE:
+            // Start the TtsExtractor. It will now find both the new articles
+            // and the "stuck" articles we just reset.
+            if (feedRepository.getEntryRepository().hasEmptyContentEntries()) {
+                Log.d(TAG, "Empty content entries found. Dispatching extraction engine.");
+                ttsExtractor.extractAllEntries();
+            } else {
+                Log.d(TAG, "No processing needed. All articles complete.");
+            }
 
             return Result.success();
         } catch (Exception e) {
-            Log.e(TAG, "Error in RssWorker: " + e.getMessage());
+            Log.e(TAG, "Sync failed: " + e.getMessage());
             return Result.retry();
         }
     }
