@@ -194,23 +194,30 @@ public class TtsService extends MediaBrowserServiceCompat {
                             ttsPlayer.initTts(TtsService.this, new TtsPlayerListener(), callback);
                         }
 
-                        boolean isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(entryId);
-                        Entry entry = entryRepository.getEntryById(entryId);
-                        if (entry == null) {
-                            throw new IllegalStateException("Entry not found for ID: " + entryId);
+                        // First, try to get content and language from SharedPreferences (set by WebViewActivity)
+                        String content = sharedPreferencesRepository.getCurrentTtsContent();
+                        String languageToUse = sharedPreferencesRepository.getCurrentTtsLang();
+
+                        // Fallback to DB content if not set in SharedPreferences
+                        if (content == null || content.trim().isEmpty()) {
+                            boolean isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(entryId);
+                            Entry entry = entryRepository.getEntryById(entryId);
+                            if (entry == null) {
+                                throw new IllegalStateException("Entry not found for ID: " + entryId);
+                            }
+
+                            String original = entry.getContent();
+                            String translated = entry.getTranslated();
+                            content = (isTranslatedView && translated != null && !translated.trim().isEmpty()) ? translated : original;
+
+                            EntryInfo entryInfo = entryRepository.getEntryInfoById(entryId);
+                            String feedLanguage = (entryInfo != null && entryInfo.getFeedLanguage() != null) ? entryInfo.getFeedLanguage() : "en";
+                            String targetLanguage = sharedPreferencesRepository.getDefaultTranslationLanguage();
+                            languageToUse = isTranslatedView ? targetLanguage : feedLanguage;
                         }
 
-                        String original = entry.getContent();
-                        String translated = entry.getTranslated();
-                        String content = (isTranslatedView && translated != null && !translated.trim().isEmpty()) ? translated : original;
-
-                        EntryInfo entryInfo = entryRepository.getEntryInfoById(entryId);
-                        String feedLanguage = (entryInfo != null && entryInfo.getFeedLanguage() != null) ? entryInfo.getFeedLanguage() : "en";
-                        String targetLanguage = sharedPreferencesRepository.getDefaultTranslationLanguage();
-                        String languageToUse = isTranslatedView ? targetLanguage : feedLanguage;
-
                         ttsPlayer.stopTtsPlayback();
-                        ttsPlayer.extract(entryId, entry.getFeedId(), content, languageToUse);
+                        ttsPlayer.extract(entryId, entryRepository.getEntryById(entryId).getFeedId(), content, languageToUse);
                     })
                     .subscribeOn(Schedulers.newThread())
                     .observeOn(AndroidSchedulers.mainThread())
@@ -356,20 +363,27 @@ public class TtsService extends MediaBrowserServiceCompat {
             Disposable trackPreparationDisposable = Completable.fromAction(() -> {
                         // --- THIS IS THE FINAL, CORRECT FLOW ---
                         // 1. Get the content for the player.
-                        boolean isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(entryId);
-                        Entry entry = entryRepository.getEntryById(entryId);
-                        if (entry == null) {
-                            throw new IllegalStateException("Entry not found for ID: " + entryId);
+                        // First, try to get content and language from SharedPreferences (set by WebViewActivity)
+                        String content = sharedPreferencesRepository.getCurrentTtsContent();
+                        String languageToUse = sharedPreferencesRepository.getCurrentTtsLang();
+
+                        // Fallback to DB content if not set in SharedPreferences
+                        if (content == null || content.trim().isEmpty()) {
+                            boolean isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(entryId);
+                            Entry entry = entryRepository.getEntryById(entryId);
+                            if (entry == null) {
+                                throw new IllegalStateException("Entry not found for ID: " + entryId);
+                            }
+                            content = (isTranslatedView && entry.getTranslated() != null && !entry.getTranslated().trim().isEmpty())
+                                    ? entry.getTranslated()
+                                    : entry.getContent();
+                            languageToUse = (isTranslatedView)
+                                    ? sharedPreferencesRepository.getDefaultTranslationLanguage()
+                                    : entryRepository.getEntryInfoById(entryId).getFeedLanguage();
                         }
-                        String content = (isTranslatedView && entry.getTranslated() != null && !entry.getTranslated().trim().isEmpty())
-                                ? entry.getTranslated()
-                                : entry.getContent();
-                        String languageToUse = (isTranslatedView)
-                                ? sharedPreferencesRepository.getDefaultTranslationLanguage()
-                                : entryRepository.getEntryInfoById(entryId).getFeedLanguage();
 
                         // 2. Call the synchronous extract method on this background thread.
-                        boolean success = ttsPlayer.extract(entryId, entry.getFeedId(), content, languageToUse);
+                        boolean success = ttsPlayer.extract(entryId, entryRepository.getEntryById(entryId).getFeedId(), content, languageToUse);
                         if (!success) {
                             throw new IllegalStateException("Extraction failed for entry ID: " + entryId);
                         }
@@ -440,6 +454,43 @@ public class TtsService extends MediaBrowserServiceCompat {
                     } else {
                         if (!ttsPlayer.isUiControlPlayback()) {
                             ttsPlayer.play();
+                        }
+                    }
+                    break;
+                case "contentChangedSummary":
+                    // Restart TTS with new content from SharedPreferences, reset progress
+                    long currentEntryId = sharedPreferencesRepository.getCurrentReadingEntryId();
+                    entryRepository.updateSentCount(0, currentEntryId);
+                    String newContent = sharedPreferencesRepository.getCurrentTtsContent();
+                    String newLang = sharedPreferencesRepository.getCurrentTtsLang();
+                    if (newContent != null && !newContent.trim().isEmpty()) {
+                        ttsPlayer.stopTtsPlayback();
+                        boolean success = ttsPlayer.extract(currentEntryId, entryRepository.getEntryById(currentEntryId).getFeedId(), newContent, newLang);
+                        if (success) {
+                            ttsPlayer.setupTts();
+                            if (!ttsPlayer.isPausedManually()) {
+                                ttsPlayer.speak();
+                            }
+                        }
+                    }
+                    break;
+                case "contentChangedTranslation":
+                    // Restart TTS with new content from SharedPreferences, maintain sentence position
+                    long currentEntryId2 = sharedPreferencesRepository.getCurrentReadingEntryId();
+                    String newContent2 = sharedPreferencesRepository.getCurrentTtsContent();
+                    String newLang2 = sharedPreferencesRepository.getCurrentTtsLang();
+                    if (newContent2 != null && !newContent2.trim().isEmpty()) {
+                        ttsPlayer.stopTtsPlayback();
+                        boolean success = ttsPlayer.extract(currentEntryId2, entryRepository.getEntryById(currentEntryId2).getFeedId(), newContent2, newLang2);
+                        if (success) {
+                            // Set sentence counter to the saved sentence index, clamped to new content size
+                            int savedSentenceIndex = sharedPreferencesRepository.getCurrentTtsSentencePosition();
+                            int clampedSentenceIndex = Math.min(savedSentenceIndex, ttsPlayer.getSentences().size() - 1);
+                            entryRepository.updateSentCount(clampedSentenceIndex, currentEntryId2);
+                            ttsPlayer.setupTts();
+                            if (!ttsPlayer.isPausedManually()) {
+                                ttsPlayer.speak();
+                            }
                         }
                     }
                     break;

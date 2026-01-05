@@ -197,4 +197,36 @@ public class SharedPreferencesRepository {
     public boolean isAiCleaningEnabled() {
         return sharedPreferences.getBoolean("ai_cleaning_enabled", true);
     }
+
+    public void setCurrentTtsContent(String content) {
+        getEditor().putString("current_tts_content", content).commit();
+    }
+
+    public String getCurrentTtsContent() {
+        return sharedPreferences.getString("current_tts_content", null);
+    }
+
+    public void setCurrentTtsLang(String lang) {
+        getEditor().putString("current_tts_lang", lang).commit();
+    }
+
+    public String getCurrentTtsLang() {
+        return sharedPreferences.getString("current_tts_lang", null);
+    }
+
+    public void setCurrentTtsPosition(int position) {
+        getEditor().putInt("current_tts_position", position).commit();
+    }
+
+    public int getCurrentTtsPosition() {
+        return sharedPreferences.getInt("current_tts_position", 0);
+    }
+
+    public void setCurrentTtsSentencePosition(int position) {
+        getEditor().putInt("current_tts_sentence_position", position).commit();
+    }
+
+    public int getCurrentTtsSentencePosition() {
+        return sharedPreferences.getInt("current_tts_sentence_position", 0);
+    }
 }

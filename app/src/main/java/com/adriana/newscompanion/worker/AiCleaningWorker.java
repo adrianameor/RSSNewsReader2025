@@ -10,6 +10,7 @@ import com.adriana.newscompanion.data.entry.Entry;
 import com.adriana.newscompanion.data.feed.FeedRepository;
 import com.adriana.newscompanion.data.repository.TranslationRepository;
 import com.adriana.newscompanion.data.sharedpreferences.SharedPreferencesRepository;
+import com.adriana.newscompanion.service.util.TextUtil;
 import java.util.List;
 import dagger.assisted.Assisted;
 import dagger.assisted.AssistedInject;
@@ -20,15 +21,17 @@ public class AiCleaningWorker extends Worker {
     private final FeedRepository feedRepository;
     private final TranslationRepository translationRepository;
     private final SharedPreferencesRepository sharedPreferencesRepository;
+    private final TextUtil textUtil;
 
     @AssistedInject
     public AiCleaningWorker(@Assisted @NonNull Context context, @Assisted @NonNull WorkerParameters workerParams,
                             FeedRepository feedRepository, TranslationRepository translationRepository,
-                            SharedPreferencesRepository sharedPreferencesRepository) {
+                            SharedPreferencesRepository sharedPreferencesRepository, TextUtil textUtil) {
         super(context, workerParams);
         this.feedRepository = feedRepository;
         this.translationRepository = translationRepository;
         this.sharedPreferencesRepository = sharedPreferencesRepository;
+        this.textUtil = textUtil;
     }
 
     @NonNull
@@ -55,6 +58,11 @@ public class AiCleaningWorker extends Worker {
                         feedRepository.getEntryRepository().updateHtml(cleanedHtml, entry.getId());
                         feedRepository.getEntryRepository().updateOriginalHtml(cleanedHtml, entry.getId());
                         feedRepository.getEntryRepository().updateTranslated(null, entry.getId());
+
+                        // Extract cleaned text and update content field
+                        String cleanedContent = textUtil.extractHtmlContent(cleanedHtml, "--####--");
+                        feedRepository.getEntryRepository().updateContent(cleanedContent, entry.getId());
+
                         Log.d(TAG, "✓ ID " + entry.getId() + " cleaned.");
                     }
                     feedRepository.getEntryRepository().markAsAiCleaned(entry.getId());

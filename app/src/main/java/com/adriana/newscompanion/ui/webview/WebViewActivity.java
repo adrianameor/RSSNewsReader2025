@@ -516,7 +516,8 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 if (!p.trim().isEmpty()) htmlSummary.append("<p>").append(p).append("</p>");
             }
             htmlToLoad = htmlSummary.toString();
-            contentForTts = titleToDisplay + " --####-- " + summaryText;
+            String processedSummary = summaryText.replace("\n\n", " --####-- ");
+            contentForTts = titleToDisplay + " --####-- " + processedSummary;
 
             langForTts = entryInfo.isAiSummaryTranslated()
                     ? sharedPreferencesRepository.getDefaultTranslationLanguage()
@@ -568,6 +569,10 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         if (contentForTts != null && !contentForTts.trim().isEmpty()) {
             ttsPlayer.extract(currentId, feedId, contentForTts, langForTts);
         }
+
+        // Store current TTS content and language in SharedPreferences for TtsService sync
+        sharedPreferencesRepository.setCurrentTtsContent(contentForTts);
+        sharedPreferencesRepository.setCurrentTtsLang(langForTts);
 
         sharedPreferencesRepository.setCurrentReadingEntryId(currentId);
         initializePlaylistSystem();
@@ -642,11 +647,19 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         if (isSummaryView) {
             isSummaryView = false;
             loadEntryContent();
+            // Notify TTS service to restart with new content (reset progress)
+            if (!isReadingMode && mMediaBrowserHelper != null && mMediaBrowserHelper.getTransportControls() != null) {
+                mMediaBrowserHelper.getTransportControls().sendCustomAction("contentChangedSummary", null);
+            }
         } else {
             EntryInfo info = webViewViewModel.getEntryInfoById(currentId);
             if (info != null && info.getSummary() != null && !info.getSummary().trim().isEmpty()) {
                 isSummaryView = true;
                 loadEntryContent();
+                // Notify TTS service to restart with new content (reset progress)
+                if (!isReadingMode && mMediaBrowserHelper != null && mMediaBrowserHelper.getTransportControls() != null) {
+                    mMediaBrowserHelper.getTransportControls().sendCustomAction("contentChangedSummary", null);
+                }
             } else {
                 webViewViewModel.summarizeArticle(currentId);
             }
@@ -798,7 +811,17 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 boolean currentMode = sharedPreferencesRepository.getIsTranslatedView(currentId);
                 isTranslatedView = !currentMode;
                 sharedPreferencesRepository.setIsTranslatedView(currentId, isTranslatedView);
+                // Stop TTS and save current sentence index before switching
+                if (!isReadingMode && ttsPlayer != null) {
+                    ttsPlayer.stopTtsPlayback();
+                    int currentSentence = ttsPlayer.getCurrentSentenceIndex();
+                    sharedPreferencesRepository.setCurrentTtsSentencePosition(currentSentence);
+                }
                 loadEntryContent();
+                // Notify TTS service to restart with new content (maintain sentence position)
+                if (!isReadingMode && mMediaBrowserHelper != null && mMediaBrowserHelper.getTransportControls() != null) {
+                    mMediaBrowserHelper.getTransportControls().sendCustomAction("contentChangedTranslation", null);
+                }
                 return true;
 
             default:
@@ -1168,8 +1191,20 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
             if (!finalText.isEmpty()) {
                 ContextCompat.getMainExecutor(getApplicationContext()).execute(() -> {
-                    Log.d("HIGHLIGHT_DEBUG", "Executing WebView.findAllAsync for: \'" + finalText + "\'");
-                    webView.findAllAsync(finalText);
+                    if (isSummaryView) {
+                        // For summary view, search paragraph-by-paragraph
+                        String[] paragraphs = finalText.split("--####--");
+                        for (String paragraph : paragraphs) {
+                            String trimmedPara = paragraph.trim();
+                            if (!trimmedPara.isEmpty()) {
+                                Log.d("HIGHLIGHT_DEBUG", "Searching paragraph: \'" + trimmedPara + "\'");
+                                webView.findAllAsync(trimmedPara);
+                            }
+                        }
+                    } else {
+                        Log.d("HIGHLIGHT_DEBUG", "Executing WebView.findAllAsync for: \'" + finalText + "\'");
+                        webView.findAllAsync(finalText);
+                    }
                 });
             }
         }
