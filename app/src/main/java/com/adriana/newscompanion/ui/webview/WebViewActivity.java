@@ -430,7 +430,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             return;
         }
 
-        boolean translationExists = entryInfo.getTranslated() != null && !entryInfo.getTranslated().trim().isEmpty();
+        boolean translationExists = entryInfo.getTranslatedTitle() != null && !entryInfo.getTranslatedTitle().equals(entryInfo.getEntryTitle());
         toggleTranslationButton.setVisible(translationExists);
 
         if (translationExists) {
