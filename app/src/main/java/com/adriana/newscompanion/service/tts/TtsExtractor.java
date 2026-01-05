@@ -83,7 +83,6 @@ public class TtsExtractor {
     private final HashMap<Long, Integer> retryCountMap = new HashMap<>();
     private final int MAX_RETRIES = 3;
     
-    // Improved Watchdog
     private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
     private Runnable watchdogRunnable;
     private int loadCounter = 0;
@@ -117,19 +116,13 @@ public class TtsExtractor {
     }
 
     public void extractAllEntries() {
-        Log.d(TAG, "extractAllEntries | extractionInProgress: " + extractionInProgress);
+        if (extractionInProgress) return;
 
-        if (extractionInProgress) {
-            return;
-        }
-
-        // RECYCLING LOGIC: Refresh WebView every 20 articles to prevent stalling
         if (loadCounter >= 20) {
-            Log.d(TAG, "Recycling WebView engine after 20 loads...");
+            Log.d(TAG, "Recycling WebView engine...");
             loadCounter = 0;
             initWebView();
-            // Wait a short moment for the new WebView to be ready before continuing
-            new Handler(Looper.getMainLooper()).postDelayed(this::extractAllEntries, 2000);
+            new Handler(Looper.getMainLooper()).postDelayed(this::extractAllEntries, 3000);
             return;
         }
 
@@ -138,13 +131,10 @@ public class TtsExtractor {
         if (entry == null && !failedIds.isEmpty()) {
             long retryId = failedIds.remove(0);
             int attempts = retryCountMap.getOrDefault(retryId, 0);
-
             if (attempts < MAX_RETRIES) {
                 retryCountMap.put(retryId, attempts + 1);
-                Log.d(TAG, "Retrying stuck article ID: " + retryId + " (Attempt " + (attempts + 1) + ")");
                 entry = entryRepository.getEntryById(retryId);
             } else {
-                Log.w(TAG, "Max retries reached for ID: " + retryId + ". Skipping.");
                 extractAllEntries();
                 return;
             }
@@ -158,14 +148,11 @@ public class TtsExtractor {
             delayTime = feedRepository.getDelayTimeById(entry.getFeedId());
             loadCounter++;
 
-            Log.d(TAG, "--- STARTING EXTRACTION [" + loadCounter + "/20] ---");
-            Log.d(TAG, "ID: " + currentIdInProgress + " | Title: " + currentTitle);
-            
+            Log.d(TAG, "Processing Article ID: " + currentIdInProgress + " [" + loadCounter + "/20]");
             ContextCompat.getMainExecutor(context).execute(() -> webView.loadUrl(currentLink));
-            
-            startWatchdog(45000); // 45 second timeout
+            startWatchdog(45000);
         } else {
-            Log.d(TAG, "Queue empty. All extractions finished.");
+            Log.d(TAG, "No more articles in queue.");
             triggerAiPipelineChain();
         }
     }
@@ -174,7 +161,7 @@ public class TtsExtractor {
         cancelWatchdog();
         watchdogRunnable = () -> {
             if (extractionInProgress) {
-                Log.e(TAG, "!!! WATCHDOG TIMEOUT !!! Article ID: " + currentIdInProgress + " stalled. Skipping to next.");
+                Log.e(TAG, "!!! WATCHDOG TIMEOUT !!! ID: " + currentIdInProgress + ". Skipping.");
                 failedIds.add(currentIdInProgress);
                 resetFlagsAndContinue();
             }
@@ -196,10 +183,17 @@ public class TtsExtractor {
     }
 
     private void triggerAiPipelineChain() {
+        if (!sharedPreferencesRepository.isSummarizationEnabled() && 
+            !sharedPreferencesRepository.isAiCleaningEnabled() && 
+            !sharedPreferencesRepository.getAutoTranslate()) {
+            return;
+        }
+
         WorkManager workManager = WorkManager.getInstance(context);
         String uniqueWorkName = "AI_CONTENT_PIPELINE";
         WorkContinuation continuation = null;
 
+        // FIX: Using REPLACE policy ensures the pipeline restarts with current pending items
         if (sharedPreferencesRepository.isSummarizationEnabled()) {
             OneTimeWorkRequest task = new OneTimeWorkRequest.Builder(AiSummarizationWorker.class).build();
             continuation = workManager.beginUniqueWork(uniqueWorkName, ExistingWorkPolicy.REPLACE, task);
@@ -219,7 +213,7 @@ public class TtsExtractor {
 
         if (continuation != null) {
             continuation.enqueue();
-            Log.d(TAG, "AI Pipeline enqueued.");
+            Log.d(TAG, "AI Pipeline chain enqueued (REPLACE policy).");
         }
     }
 
@@ -253,16 +247,6 @@ public class TtsExtractor {
         @Override
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
-            
-            // Redirect Guard
-            if (url != null && currentLink != null) {
-                Uri expected = Uri.parse(currentLink);
-                Uri actual = Uri.parse(url);
-                if (!expected.getHost().equalsIgnoreCase(actual.getHost()) && !actual.getHost().contains(expected.getHost())) {
-                    Log.w(TAG, "[Intelligent Guard] Redirect detected: " + actual.getHost());
-                }
-            }
-
             if (extractionInProgress && webView.getProgress() == 100) {
                 handler.postDelayed(() -> webView.evaluateJavascript("(function() {return document.getElementsByTagName('html')[0].outerHTML;})();", value -> {
                     JsonReader reader = new JsonReader(new StringReader(value));
@@ -274,7 +258,6 @@ public class TtsExtractor {
                             if (html != null) {
                                 Readability4JExtended readability4J = new Readability4JExtended(currentLink, html);
                                 Article article = readability4J.parse();
-                                
                                 if (article.getContentWithUtf8Encoding() != null) {
                                     Document doc = Jsoup.parse(article.getContentWithUtf8Encoding());
                                     doc.select("h1").remove();
@@ -296,12 +279,8 @@ public class TtsExtractor {
                                             }
                                         }
                                     }
-                                    
                                     String finalFullText = contentCollector.toString();
-                                    
-                                    // Heuristic Check: Is the content actually real?
                                     if (finalFullText.length() < 200 || finalFullText.toLowerCase().contains("please enable javascript")) {
-                                        Log.w(TAG, "Extraction suspicious (too short or blocked). Flagging for retry.");
                                         failedIds.add(currentIdInProgress);
                                     } else {
                                         entryRepository.updateHtml(doc.html(), currentIdInProgress);
@@ -315,7 +294,6 @@ public class TtsExtractor {
                             }
                         }
                     } catch (Exception e) {
-                        Log.e(TAG, "Eval Error: " + e.getMessage());
                         failedIds.add(currentIdInProgress);
                     } finally {
                         cancelWatchdog();

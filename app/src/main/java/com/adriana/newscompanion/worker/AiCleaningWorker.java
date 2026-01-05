@@ -38,26 +38,24 @@ public class AiCleaningWorker extends Worker {
             Log.d(TAG, "=== AI Cleaning Worker Started (Phase 2) ===");
             long currentId = sharedPreferencesRepository.getCurrentReadingEntryId();
             String sortBy = sharedPreferencesRepository.getSortBy();
+            
+            // SMART GATE: Check if summarization is off
+            int summarizeDisabled = sharedPreferencesRepository.isSummarizationEnabled() ? 0 : 1;
 
-            List<Entry> uncleaned = feedRepository.getEntryRepository().getUncleanedEntriesPrioritized(currentId, sortBy);
+            // Fetch only articles that are "Ready" (Summarized OR Summarization is OFF)
+            List<Entry> uncleaned = feedRepository.getEntryRepository().getUncleanedEntriesPrioritized(currentId, sortBy, summarizeDisabled);
 
             for (Entry entry : uncleaned) {
-                // RULE: Always use the raw untranslated source (original_html)
                 String sourceHtml = entry.getOriginalHtml();
                 if (sourceHtml != null && !sourceHtml.isEmpty()) {
                     Log.d(TAG, "AI Cleaning ID: " + entry.getId());
                     String cleanedHtml = translationRepository.cleanArticleHtml(sourceHtml).blockingGet();
 
                     if (cleanedHtml != null && !cleanedHtml.trim().isEmpty() && !cleanedHtml.equals(sourceHtml)) {
-                        // 1. Update BOTH columns with CLEANED UNTRANSLATED text
                         feedRepository.getEntryRepository().updateHtml(cleanedHtml, entry.getId());
                         feedRepository.getEntryRepository().updateOriginalHtml(cleanedHtml, entry.getId());
-
-                        // 2. FIX: We only wipe the 'translated' body, NOT the title.
-                        // This ensures the Summarizer's translated title stays visible while cleaning happens.
                         feedRepository.getEntryRepository().updateTranslated(null, entry.getId());
-                        
-                        Log.d(TAG, "✓ ID " + entry.getId() + " cleaned. Body reset for re-translation, Title preserved.");
+                        Log.d(TAG, "✓ ID " + entry.getId() + " cleaned.");
                     }
                     feedRepository.getEntryRepository().markAsAiCleaned(entry.getId());
                 }

@@ -64,36 +64,29 @@ public class SettingsFragment extends PreferenceFragmentCompat {
                     rssWorkManager.enqueueRssWorker();
                     break;
                 case "autoTranslate":
-                    // THIS IS THE FIX:
-                    // If the user turns on auto-translate, we immediately
-                    // run the worker to translate any existing articles.
+                case "displaySummary":
+                    // FIX: If user enables Translation or Summarization, start the sync immediately
+                    // to process existing articles.
                     if (sharedPreferences.getBoolean(key, false)) {
-                        Log.d("SettingsFragment", "Auto-translate enabled. Enqueuing worker now.");
+                        Log.d("SettingsFragment", key + " enabled. Triggering sync engine.");
                         rssWorkManager.enqueueRssWorker();
+                        Toast.makeText(requireContext(), "Processing articles...", Toast.LENGTH_SHORT).show();
                     }
                     break;
                 case "ai_cleaning_enabled":
-                    // When user toggles AI cleaning, trigger it immediately if enabled
                     if (sharedPreferences.getBoolean(key, false)) {
-                        Log.d("SettingsFragment", "AI Cleaning enabled. Triggering AI Cleaning Worker now.");
+                        Log.d("SettingsFragment", "AI Cleaning enabled. Triggering cleaner.");
                         AiCleaningTrigger.triggerAiCleaning(requireContext());
-                        Toast.makeText(requireContext(), "AI Cleaning started...", Toast.LENGTH_SHORT).show();
-                    } else {
-                        Log.d("SettingsFragment", "AI Cleaning disabled.");
+                        Toast.makeText(requireContext(), "Cleaning articles...", Toast.LENGTH_SHORT).show();
                     }
                     break;
                 case "sortBy":
-                    // When user changes sort order, re-trigger AI cleaning with new priority
                     if (sharedPreferencesRepository.isAiCleaningEnabled()) {
-                        String newSortOrder = sharedPreferences.getString(key, "oldest");
-                        Log.d("SettingsFragment", "Sort order changed to: " + newSortOrder + ". Re-triggering AI Cleaning.");
                         AiCleaningTrigger.triggerAiCleaning(requireContext());
-                        Toast.makeText(requireContext(), "Re-cleaning articles with new order", Toast.LENGTH_SHORT).show();
                     }
                     break;
                 case "night":
-                    boolean night = sharedPreferencesRepository.getNight();
-                    if (night) {
+                    if (sharedPreferencesRepository.getNight()) {
                         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES);
                     } else {
                         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO);
@@ -102,8 +95,7 @@ public class SettingsFragment extends PreferenceFragmentCompat {
                     break;
                 case "backgroundMusic":
                     if (ttsPlayer.isPlayingMediaPlayer()) {
-                        boolean backgroundMusic = sharedPreferencesRepository.getBackgroundMusic();
-                        if (backgroundMusic) {
+                        if (sharedPreferencesRepository.getBackgroundMusic()) {
                             ttsPlayer.setupMediaPlayer(false);
                         } else {
                             ttsPlayer.stopMediaPlayer();
@@ -155,13 +147,9 @@ public class SettingsFragment extends PreferenceFragmentCompat {
 
         Preference ttsSettingsPreference = findPreference("key_text_to_speech_settings");
         if (ttsSettingsPreference != null) {
-            ttsSettingsPreference.setOnPreferenceClickListener(new Preference.OnPreferenceClickListener() {
-                @Override
-                public boolean onPreferenceClick(@NonNull Preference preference) {
-                    Intent intent = new Intent("com.android.settings.TTS_SETTINGS");
-                    startActivity(intent);
-                    return true;
-                }
+            ttsSettingsPreference.setOnPreferenceClickListener(preference -> {
+                startActivity(new Intent("com.android.settings.TTS_SETTINGS"));
+                return true;
             });
         }
     }
@@ -178,39 +166,28 @@ public class SettingsFragment extends PreferenceFragmentCompat {
         Objects.requireNonNull(getPreferenceManager().getSharedPreferences()).unregisterOnSharedPreferenceChangeListener(listener);
     }
 
-    // Define the ActivityResultLauncher for saving the music file
     private final ActivityResultLauncher<Intent> saveMusicFileLauncher = registerForActivityResult(
             new ActivityResultContracts.StartActivityForResult(),
-            new ActivityResultCallback<ActivityResult>() {
-                @Override
-                public void onActivityResult(ActivityResult result) {
-                    if (result.getResultCode() == RESULT_OK) {
-                        Intent data = result.getData();
-                        if (data != null) {
-                            // Handle the selected audio file
-                            Uri fileUri = data.getData();
-                            handleSelectedFile(fileUri);
-                        }
-                    } else {
-                        // File selection canceled or failed
-                        if (isAdditionalImport) {
-                            isAdditionalImport = false;
-                        } else {
-                            sharedPreferencesRepository.setBackgroundMusicFile("default");
-                            backgroundMusicFilePreference.setValue("default");
-                        }
-                        Toast.makeText(requireContext(), "File selection canceled or failed", Toast.LENGTH_SHORT).show();
+            result -> {
+                if (result.getResultCode() == RESULT_OK) {
+                    Intent data = result.getData();
+                    if (data != null) {
+                        handleSelectedFile(data.getData());
                     }
+                } else {
+                    if (isAdditionalImport) {
+                        isAdditionalImport = false;
+                    } else {
+                        sharedPreferencesRepository.setBackgroundMusicFile("default");
+                        backgroundMusicFilePreference.setValue("default");
+                    }
+                    Toast.makeText(requireContext(), "File selection canceled or failed", Toast.LENGTH_SHORT).show();
                 }
             });
 
     private void handleSelectedFile(Uri fileUri) {
         File internalStorageDir = getActivity().getFilesDir();
-
-        // Create a File object for the destination file in internal storage
         File destinationFile = new File(internalStorageDir, "user_file.mp3");
-
-        // Copy the user-inserted file to the destination in internal storage
         try {
             InputStream inputStream = getActivity().getContentResolver().openInputStream(fileUri);
             OutputStream outputStream = new FileOutputStream(destinationFile);

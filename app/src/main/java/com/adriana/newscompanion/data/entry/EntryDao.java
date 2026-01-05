@@ -168,6 +168,9 @@ public interface EntryDao {
     @Query("UPDATE entry_table SET title = :title WHERE feedId = :feedId AND link = :link")
     void updateTitle(long feedId, String title, String link);
 
+    @Query("UPDATE entry_table SET title = :title WHERE id = :id")
+    void updateTitleById(String title, long id);
+
     @Query("UPDATE entry_table SET link = :link WHERE feedId = :feedId AND title = :title")
     void updateLink(long feedId, String title, String link);
 
@@ -201,7 +204,7 @@ public interface EntryDao {
     @Query("DELETE FROM entry_table WHERE feedId = :feedId AND id NOT IN (SELECT id FROM entry_table WHERE feedId = :feedId ORDER BY publishedDate DESC LIMIT :limit) AND id NOT IN (SELECT id FROM entry_table WHERE bookmark = 'Y' AND feedId = :feedId)")
     void limitEntriesByFeed(long feedId, int limit);
 
-    @Query("UPDATE entry_table SET priority = 1 WHERE html IS NULL")
+    @Query("UPDATE entry_table SET priority = 1 WHERE content IS NULL AND priority = 0")
     void requeueMissingEntries();
 
     @Query("SELECT * FROM entry_table WHERE id = :id")
@@ -228,8 +231,9 @@ public interface EntryDao {
     @Query("SELECT e.id as entryId, e.title as entryTitle, e.content as content, e.priority as priority, e.link as entryLink, e.description as entryDescription, e.imageUrl as entryImageUrl, e.publishedDate as entryPublishedDate, e.visitedDate as visitedDate, e.category as entryCategory, e.bookmark as bookmark, e.original_html as originalHtml, e.html as html, e.translated as translated, e.translated_title as translatedTitle, e.translated_summary as translatedSummary, e.target_translation_language as targetTranslationLanguage, e.isAiCleaned as isAiCleaned, e.summary as summary, e.isAiSummarized as isAiSummarized, e.isAiSummaryTranslated as isAiSummaryTranslated, f.id as feedId, f.ttsSpeechRate as ttsSpeechRate, f.language as feedLanguage, f.title as feedTitle, f.imageUrl as feedImageUrl " +
             "FROM entry_table e " +
             "LEFT JOIN feed_table f ON e.feedId = f.id " +
-            "WHERE e.translated_title IS NULL OR e.translated_summary IS NULL")
-    List<EntryInfo> getUntranslatedEntriesInfo();
+            "WHERE (e.translated_title IS NULL OR e.translated_summary IS NULL) AND (e.isAiCleaned = 1 OR :cleaningDisabled = 1) " +
+            "ORDER BY e.publishedDate DESC")
+    List<EntryInfo> getUntranslatedEntriesInfo(int cleaningDisabled);
 
     @Query("UPDATE entry_table SET translated_title = :translatedTitle WHERE id = :id")
     void updateTranslatedTitle(String translatedTitle, long id);
@@ -246,21 +250,21 @@ public interface EntryDao {
     @Query("SELECT id FROM entry_table WHERE bookmark = 'Y' ORDER BY publishedDate DESC LIMIT :limit")
     List<Long> getBookmarkedIds(int limit);
 
-    @Query("SELECT id FROM entry_table ORDER BY RANDOM() LIMIT :limit")
+    @Query("SELECT id FROM entry_table ORDER BY publishedDate IS NOT NULL, RANDOM() LIMIT :limit")
     List<Long> getRandomArticleIds(int limit);
 
-    @Query("SELECT * FROM entry_table WHERE html IS NOT NULL AND isAiCleaned = 0")
-    List<Entry> getUncleanedEntries();
+    @Query("SELECT * FROM entry_table WHERE html IS NOT NULL AND isAiCleaned = 0 AND (isAiSummarized = 1 OR :summarizeDisabled = 1)")
+    List<Entry> getUncleanedEntries(int summarizeDisabled);
 
-    @Query("SELECT * FROM entry_table WHERE html IS NOT NULL AND isAiCleaned = 0 " +
+    @Query("SELECT * FROM entry_table WHERE html IS NOT NULL AND isAiCleaned = 0 AND (isAiSummarized = 1 OR :summarizeDisabled = 1) " +
             "ORDER BY CASE WHEN id = :currentReadingId THEN 0 ELSE 1 END, " +
             "publishedDate DESC")
-    List<Entry> getUncleanedEntriesPrioritizedNewest(long currentReadingId);
+    List<Entry> getUncleanedEntriesPrioritizedNewest(long currentReadingId, int summarizeDisabled);
 
-    @Query("SELECT * FROM entry_table WHERE html IS NOT NULL AND isAiCleaned = 0 " +
+    @Query("SELECT * FROM entry_table WHERE html IS NOT NULL AND isAiCleaned = 0 AND (isAiSummarized = 1 OR :summarizeDisabled = 1) " +
             "ORDER BY CASE WHEN id = :currentReadingId THEN 0 ELSE 1 END, " +
             "publishedDate ASC")
-    List<Entry> getUncleanedEntriesPrioritizedOldest(long currentReadingId);
+    List<Entry> getUncleanedEntriesPrioritizedOldest(long currentReadingId, int summarizeDisabled);
 
     @Query("UPDATE entry_table SET isAiCleaned = 1 WHERE id = :id")
     void markAsAiCleaned(long id);

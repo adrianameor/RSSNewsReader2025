@@ -402,7 +402,8 @@ public class EntryRepository {
     }
 
     public List<EntryInfo> getUntranslatedEntriesInfo() {
-        return entryDao.getUntranslatedEntriesInfo();
+        int cleaningDisabled = sharedPreferencesRepository.isAiCleaningEnabled() ? 0 : 1;
+        return entryDao.getUntranslatedEntriesInfo(cleaningDisabled);
     }
 
     public void updateTranslatedTitle(String translatedTitle, long id) {
@@ -433,16 +434,15 @@ public class EntryRepository {
         return entryDao.getRandomArticleIds(limit);
     }
     public List<Entry> getUncleanedEntries() {
-        return entryDao.getUncleanedEntries();
+        int summarizeDisabled = sharedPreferencesRepository.isSummarizationEnabled() ? 0 : 1;
+        return entryDao.getUncleanedEntries(summarizeDisabled);
     }
 
-    public List<Entry> getUncleanedEntriesPrioritized(long currentReadingId, String sortBy) {
-        // sortBy can be "oldest" or "latest" (NOT "newest")
+    public List<Entry> getUncleanedEntriesPrioritized(long currentReadingId, String sortBy, int summarizeDisabled) {
         if ("latest".equalsIgnoreCase(sortBy)) {
-            return entryDao.getUncleanedEntriesPrioritizedNewest(currentReadingId);
+            return entryDao.getUncleanedEntriesPrioritizedNewest(currentReadingId, summarizeDisabled);
         } else {
-            // Default to oldest first
-            return entryDao.getUncleanedEntriesPrioritizedOldest(currentReadingId);
+            return entryDao.getUncleanedEntriesPrioritizedOldest(currentReadingId, summarizeDisabled);
         }
     }
 

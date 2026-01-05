@@ -158,32 +158,32 @@ public class FeedRepository {
     }
 
     public void addNewFeed(RssFeed feed) {
+        // --- INTELLIGENT DETECTION: Don't trust "en" blindly from RSS ---
         String rssLanguage = feed.getLanguage();
-        if (rssLanguage != null && !rssLanguage.trim().isEmpty() && !rssLanguage.equalsIgnoreCase("und")) {
+        
+        // If the feed says it's English, we STILL verify it because many Malay/Indo sites use "en" by mistake.
+        boolean needsVerification = (rssLanguage == null || rssLanguage.trim().isEmpty() || rssLanguage.equalsIgnoreCase("und") || rssLanguage.equalsIgnoreCase("en"));
+
+        if (!needsVerification) {
             Log.d(TAG, "Using language from RSS feed: " + rssLanguage + " for feed: " + feed.getLink());
             saveFeedAndEntries(feed, rssLanguage);
             return;
         }
         
-        Log.d(TAG, "No valid language in RSS feed, attempting automatic detection for: " + feed.getLink());
+        Log.d(TAG, "RSS language is '" + rssLanguage + "'. Performing verification for: " + feed.getLink());
 
         StringBuilder sampleText = new StringBuilder();
         for (int i = 0; i < Math.min(5, feed.getRssItems().size()); i++) {
             RssItem item = feed.getRssItems().get(i);
-            if (item.getTitle() != null) {
-                sampleText.append(item.getTitle()).append(". ");
-            }
+            if (item.getTitle() != null) sampleText.append(item.getTitle()).append(". ");
             if (item.getDescription() != null) {
-                String pText = Jsoup.parse(item.getDescription()).select("p").text();
-                if (pText != null && !pText.isEmpty()) {
-                    sampleText.append(pText).append(" ");
-                }
+                String pText = Jsoup.parse(item.getDescription()).text();
+                if (pText != null && !pText.isEmpty()) sampleText.append(pText).append(" ");
             }
         }
 
         if (sampleText.toString().trim().isEmpty()) {
-            Log.w(TAG, "No clean sample text found for language detection. Saving with default 'en'.");
-            saveFeedAndEntries(feed, "en");
+            saveFeedAndEntries(feed, (rssLanguage != null) ? rssLanguage : "en");
             return;
         }
 
@@ -192,17 +192,16 @@ public class FeedRepository {
                 .observeOn(Schedulers.io())
                 .subscribe(
                         identifiedLanguage -> {
-                            if (identifiedLanguage != null && !identifiedLanguage.equalsIgnoreCase("und") && !identifiedLanguage.trim().isEmpty()) {
-                                Log.d(TAG, "Auto-detected language for feed '" + feed.getLink() + "' as: " + identifiedLanguage);
+                            if (identifiedLanguage != null && !identifiedLanguage.equalsIgnoreCase("und")) {
+                                Log.d(TAG, "Verification Success: Detected '" + identifiedLanguage + "' for feed: " + feed.getLink());
                                 saveFeedAndEntries(feed, identifiedLanguage);
                             } else {
-                                Log.w(TAG, "Language detection resulted in '" + identifiedLanguage + "'. Defaulting to 'en' for feed: " + feed.getLink());
-                                saveFeedAndEntries(feed, "en");
+                                Log.w(TAG, "Verification ambiguous. Defaulting to: " + rssLanguage);
+                                saveFeedAndEntries(feed, (rssLanguage != null) ? rssLanguage : "en");
                             }
                         },
                         error -> {
-                            Log.e(TAG, "Language detection failed for feed " + feed.getLink() + ". Defaulting to 'en'.", error);
-                            saveFeedAndEntries(feed, "en");
+                            saveFeedAndEntries(feed, (rssLanguage != null) ? rssLanguage : "en");
                         }
                 );
 
@@ -211,7 +210,7 @@ public class FeedRepository {
 
     private void saveFeedAndEntries(RssFeed feed, String languageCode) {
         String normalizedLanguage = LanguageUtil.normalizeLanguageCode(languageCode);
-        Log.d(TAG, "Saving feed with normalized language: " + languageCode + " → " + normalizedLanguage);
+        Log.d(TAG, "Saving feed with normalized language: " + normalizedLanguage);
         
         String imageUrl = "https://www.google.com/s2/favicons?sz=64&domain_url=" + feed.getLink();
         Feed newFeed = new Feed(feed.getTitle(), feed.getLink(), feed.getDescription(), imageUrl, normalizedLanguage);
@@ -240,8 +239,6 @@ public class FeedRepository {
                 Log.d(TAG, "Dispatching call to extractAllEntries() to the main thread.");
                 ttsExtractorProvider.get().extractAllEntries();
             });
-        } else {
-            Log.d(TAG, "No entries to extract.");
         }
 
         if (!rssWorkManager.isWorkScheduled()) {
@@ -269,22 +266,12 @@ public class FeedRepository {
                     .observeOn(AndroidSchedulers.mainThread())
                     .subscribe(new CompletableObserver() {
                         @Override
-                        public void onSubscribe(@NonNull Disposable d) {
-                            Log.d(TAG, "markFeedAsPreloaded: Feed marked as preloaded" + feed.getTitle());
-                        }
-
+                        public void onSubscribe(@NonNull Disposable d) {}
                         @Override
-                        public void onComplete() {
-                            Log.d(TAG, "markFeedAsPreloaded: Complete");
-                        }
-
+                        public void onComplete() {}
                         @Override
-                        public void onError(@NonNull Throwable e) {
-                            Log.e(TAG, "markFeedAsPreloaded: Error " + e.getMessage());
-                        }
+                        public void onError(@NonNull Throwable e) {}
                     });
-        } else {
-            Log.w(TAG, "markFeedAsPreloaded: Feed not found for ID " + feedId);
         }
     }
 
@@ -300,7 +287,6 @@ public class FeedRepository {
         for (Feed feed : feeds) {
             executorService.submit(() -> {
                 try {
-                    Log.d(TAG, "Fetching feed: " + feed.getLink());
                     RssReader rssReader = new RssReader(feed.getLink());
                     RssFeed rssFeed = rssReader.getFeed();
 
@@ -321,9 +307,8 @@ public class FeedRepository {
                     if (!histories.isEmpty()) {
                         historyRepository.updateHistoriesByFeedId(feed.getId(), histories);
                     }
-                    Log.d(TAG, "Successfully fetched and processed feed: " + feed.getTitle());
                 } catch (Exception e) {
-                    Log.e(TAG, "Error fetching or processing feed: " + feed.getTitle(), e);
+                    Log.e(TAG, "Error processing feed: " + feed.getTitle(), e);
                 }
             });
         }
@@ -331,9 +316,7 @@ public class FeedRepository {
         executorService.shutdown();
         try {
             executorService.awaitTermination(10, TimeUnit.MINUTES);
-        } catch (InterruptedException e) {
-            Log.e(TAG, "Error awaiting termination of executor service.", e);
-        }
+        } catch (InterruptedException e) {}
 
         entryRepository.requeueMissingEntries();
         return "New entries: " + counter.get();
