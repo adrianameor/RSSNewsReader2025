@@ -419,7 +419,12 @@ public class EntryRepository {
     }
 
     public List<Long> getArticleIdsByFeedId(long feedId, int limit) {
-        return entryDao.getArticleIdsByFeedId(feedId, limit);
+        String sortBy = sharedPreferencesRepository.getSortBy();
+        if ("oldest".equalsIgnoreCase(sortBy)) {
+            return entryDao.getArticleIdsByFeedIdOldest(feedId, limit);
+        } else {
+            return entryDao.getArticleIdsByFeedId(feedId, limit);
+        }
     }
 
     public List<Long> getRecentlyReadIds(int limit) {

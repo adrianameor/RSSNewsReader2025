@@ -293,6 +293,8 @@ public class TtsService extends MediaBrowserServiceCompat {
 
             // 2. Try to move to the next item in the stateful playlist.
             if (ttsPlaylist.skipNext()) {
+                // Reset paused state to allow automatic progression
+                ttsPlayer.setPausedManually(false);
                 // 3. If successful, call our NEW, lightweight helper method.
                 prepareAndPlayCurrentTrack();
                 

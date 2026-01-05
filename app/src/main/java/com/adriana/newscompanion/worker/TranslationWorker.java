@@ -9,7 +9,9 @@ import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import androidx.work.Worker;
 import androidx.work.WorkerParameters;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import dagger.assisted.Assisted;
 import dagger.assisted.AssistedInject;
@@ -51,39 +53,52 @@ public class TranslationWorker extends Worker {
     @Override
     public Result doWork() {
         Log.d(TAG, "WORKER: Starting Intelligent Translation (Phase 3).");
-        
+
         // Ensure we check settings before grabbing the list
         int cleaningDisabled = sharedPreferencesRepository.isAiCleaningEnabled() ? 0 : 1;
         List<EntryInfo> entriesToProcess = entryRepository.getUntranslatedEntriesInfo();
         String defaultTargetLang = sharedPreferencesRepository.getDefaultTranslationLanguage();
+        Map<Long, Boolean> feedNeedsTranslation = new HashMap<>();
+
+        Map<Long, String> feedSourceLang = new HashMap<>();
 
         for (EntryInfo entry : entriesToProcess) {
             try {
                 String originalTitle = entry.getEntryTitle();
                 if (originalTitle == null || originalTitle.isEmpty()) continue;
 
-                // 1. INTELLIGENT VERIFICATION: Use Title + Description for stronger detection
-                StringBuilder detectionText = new StringBuilder(originalTitle);
-                if (entry.getEntryDescription() != null && !entry.getEntryDescription().isEmpty()) {
-                    String cleanDesc = org.jsoup.Jsoup.parse(entry.getEntryDescription()).text();
-                    detectionText.append(" ").append(cleanDesc);
-                }
-
-                String verifiedLang = textUtil.identifyLanguageRx(detectionText.toString()).blockingGet();
-                String dbLang = entry.getFeedLanguage();
                 String targetLang = entry.getTargetTranslationLanguage() != null ? entry.getTargetTranslationLanguage() : defaultTargetLang;
 
-                // SELF-CORRECTION: If DB says 'en' but we see 'ms', fix the DB
-                if (verifiedLang != null && !verifiedLang.equals("und") && !verifiedLang.equalsIgnoreCase(dbLang)) {
-                    Log.w(TAG, "Self-Correction: Feed " + entry.getFeedId() + " was labeled " + dbLang + " but is actually " + verifiedLang);
-                    feedRepository.updateTitleDescLanguage(entry.getFeedTitle(), "", verifiedLang, entry.getEntryLink());
+                if (!feedNeedsTranslation.containsKey(entry.getFeedId())) {
+                    // 1. INTELLIGENT VERIFICATION: Use Title + Description for stronger detection
+                    StringBuilder detectionText = new StringBuilder(originalTitle);
+                    if (entry.getEntryDescription() != null && !entry.getEntryDescription().isEmpty()) {
+                        String cleanDesc = org.jsoup.Jsoup.parse(entry.getEntryDescription()).text();
+                        detectionText.append(" ").append(cleanDesc);
+                    }
+
+                    String verifiedLang = textUtil.identifyLanguageRx(detectionText.toString()).blockingGet();
+                    String dbLang = entry.getFeedLanguage();
+
+                    // SELF-CORRECTION: If DB says 'en' but we see 'ms', fix the DB
+                    if (verifiedLang != null && !verifiedLang.equals("und") && !verifiedLang.equalsIgnoreCase(dbLang)) {
+                        Log.w(TAG, "Self-Correction: Feed " + entry.getFeedId() + " was labeled " + dbLang + " but is actually " + verifiedLang);
+                        feedRepository.updateTitleDescLanguage(entry.getFeedTitle(), "", verifiedLang, entry.getEntryLink());
+                    }
+
+                    String finalSourceLang = (verifiedLang != null && !verifiedLang.equals("und")) ? verifiedLang : dbLang;
+                    feedSourceLang.put(entry.getFeedId(), finalSourceLang);
+
+                    boolean needsTrans = !isSameLanguage(finalSourceLang, targetLang);
+                    feedNeedsTranslation.put(entry.getFeedId(), needsTrans);
+                    Log.d(TAG, "Feed " + entry.getFeedId() + " needs translation: " + needsTrans + " (source: " + finalSourceLang + ", target: " + targetLang + ")");
                 }
 
-                String finalSourceLang = (verifiedLang != null && !verifiedLang.equals("und")) ? verifiedLang : dbLang;
+                boolean needsTranslation = feedNeedsTranslation.get(entry.getFeedId());
+                String finalSourceLang = feedSourceLang.get(entry.getFeedId());
 
-                // 2. CHECK: Does it actually need translation?
-                if (isSameLanguage(finalSourceLang, targetLang)) {
-                    Log.d(TAG, "ID " + entry.getEntryId() + " verified as target language. Syncing.");
+                if (!needsTranslation) {
+                    Log.d(TAG, "ID " + entry.getEntryId() + " from feed " + entry.getFeedId() + " does not need translation. Syncing.");
                     syncSameLanguageEntry(entry, originalTitle);
                     continue;
                 }
@@ -103,7 +118,7 @@ public class TranslationWorker extends Worker {
                 if (cleanedHtml != null && !cleanedHtml.isEmpty()) {
                     String translatedHtml = translationRepository.translateText(cleanedHtml, finalSourceLang, targetLang).blockingGet();
                     entryRepository.updateHtml(translatedHtml, entry.getEntryId());
-                    
+
                     String plainTextWithMarkers = textUtil.extractHtmlContent(translatedHtml, "--####--");
                     entryRepository.updateTranslated(translatedTitle + "--####--" + plainTextWithMarkers, entry.getEntryId());
                 }

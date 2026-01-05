@@ -244,6 +244,9 @@ public interface EntryDao {
     @Query("SELECT id FROM entry_table WHERE feedId = :feedId ORDER BY publishedDate DESC LIMIT :limit")
     List<Long> getArticleIdsByFeedId(long feedId, int limit);
 
+    @Query("SELECT id FROM entry_table WHERE feedId = :feedId ORDER BY publishedDate ASC LIMIT :limit")
+    List<Long> getArticleIdsByFeedIdOldest(long feedId, int limit);
+
     @Query("SELECT id FROM entry_table WHERE visitedDate IS NOT NULL ORDER BY visitedDate DESC LIMIT :limit")
     List<Long> getRecentlyReadIds(int limit);
 
