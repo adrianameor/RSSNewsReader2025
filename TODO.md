@@ -1,3 +1,14 @@
+# TODO: Fix TTS Navigation Behavior
+
+## Approved Plan
+- When navigating back to the same article, TTS should continue without stopping.
+- When switching to a different article, stop current TTS and start new one.
+
+## Steps
+1. ✅ Update WebViewActivity.onNewIntent() - only stop TTS if newEntryId != currentId.
+2. ✅ Update TtsService.onPrepareFromMediaId() - only stop TTS if mediaId != preparedData.mediaId.
+3. Test the changes.
+
 # TODO: Fix TTS to Read Title First
 
 ## Approved Plan

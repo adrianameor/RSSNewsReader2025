@@ -151,7 +151,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
-        
+
         long newEntryId = intent.getLongExtra("entry_id", -1);
         String newEntryTitle = intent.getStringExtra("entry_title");
         boolean isFromSkipAction = intent.getBooleanExtra("from_skip", false);
@@ -160,7 +160,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
         setIntent(intent);
 
-        if (!isFromSkipAction) {
+        if (!isFromSkipAction && newEntryId != currentId) {
             if (ttsPlayer != null && ttsPlayer.isSpeaking()) {
                 ttsPlayer.stopTtsPlayback();
             }

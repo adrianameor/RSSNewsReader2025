@@ -188,6 +188,12 @@ public class TtsService extends MediaBrowserServiceCompat {
                             throw new IllegalStateException("PreparedData is null after loading, cannot prepare playback.");
                         }
 
+                        // Check if this is the same article
+                        boolean isSameArticle = preparedData.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID).equals(String.valueOf(entryId));
+                        if (!isSameArticle) {
+                            ttsPlayer.stopTtsPlayback();
+                        }
+
                         // The rest of the preparation logic remains the same.
                         if (!ttsPlayer.isPausedManually()) {
                             ttsPlayer.setupMediaPlayer(false);
@@ -224,7 +230,6 @@ public class TtsService extends MediaBrowserServiceCompat {
                             languageToUse = isTranslatedView ? targetLanguage : feedLanguage;
                         }
 
-                        ttsPlayer.stopTtsPlayback();
                         ttsPlayer.extract(entryId, entryRepository.getEntryById(entryId).getFeedId(), content, languageToUse);
                     })
                     .subscribeOn(Schedulers.newThread())
