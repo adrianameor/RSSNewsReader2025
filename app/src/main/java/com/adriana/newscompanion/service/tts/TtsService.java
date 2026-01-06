@@ -49,6 +49,8 @@ public class TtsService extends MediaBrowserServiceCompat {
     EntryRepository entryRepository;
     @Inject
     PlaylistRepository playlistRepository;
+    @Inject
+    TtsExtractor ttsExtractor;
     private TtsNotification ttsNotification;
     private static MediaSessionCompat mediaSession;
     private MediaMetadataCompat preparedData;
@@ -209,6 +211,12 @@ public class TtsService extends MediaBrowserServiceCompat {
                             String original = entry.getContent();
                             String translated = entry.getTranslated();
                             content = (isTranslatedView && translated != null && !translated.trim().isEmpty()) ? translated : original;
+
+                            // Prepend title to content for TTS
+                            String title = isTranslatedView && entry.getTranslatedTitle() != null && !entry.getTranslatedTitle().trim().isEmpty() ? entry.getTranslatedTitle() : entry.getTitle();
+                            if (title != null && !title.trim().isEmpty()) {
+                                content = title + ttsExtractor.delimiter + content;
+                            }
 
                             EntryInfo entryInfo = entryRepository.getEntryInfoById(entryId);
                             String feedLanguage = (entryInfo != null && entryInfo.getFeedLanguage() != null) ? entryInfo.getFeedLanguage() : "en";
@@ -379,6 +387,11 @@ public class TtsService extends MediaBrowserServiceCompat {
                             content = (isTranslatedView && entry.getTranslated() != null && !entry.getTranslated().trim().isEmpty())
                                     ? entry.getTranslated()
                                     : entry.getContent();
+                            // Prepend title to content for TTS
+                            String title = isTranslatedView && entry.getTranslatedTitle() != null && !entry.getTranslatedTitle().trim().isEmpty() ? entry.getTranslatedTitle() : entry.getTitle();
+                            if (title != null && !title.trim().isEmpty()) {
+                                content = title + ttsExtractor.delimiter + content;
+                            }
                             languageToUse = (isTranslatedView)
                                     ? sharedPreferencesRepository.getDefaultTranslationLanguage()
                                     : entryRepository.getEntryInfoById(entryId).getFeedLanguage();

@@ -1,30 +1,12 @@
-# TTS Language Detection Fix - Implementation Progress
+# TODO: Fix TTS to Read Title First
 
-## Problem
-RSS feeds contain language information (e.g., `<language>ms-MY</language>`), but the app ignores it and tries to detect language automatically, which often fails and defaults to English.
+## Approved Plan
+- Prepend article title to content before passing to TTS player.
+- Use consistent delimiter "--####--" from TtsExtractor.
 
-## Solution Steps
-
-### ✅ Step 1: Create Language Utility Class
-- [x] Create `LanguageUtil.java` with language code normalization
-- [x] Add mapping for common language codes (zh→zh-CN, ms→ms-MY, etc.)
-
-### ✅ Step 2: Fix FeedRepository
-- [x] Update `addNewFeed()` to prioritize RSS feed language
-- [x] Use automatic detection only as fallback
-- [x] Apply language normalization
-
-### ✅ Step 3: Verify TtsPlayer
-- [x] TtsPlayer already handles language codes correctly
-- [x] No changes needed - it uses the feed language from EntryInfo
-
-### ⏳ Step 4: Testing
-- [ ] Test with Malay feed (should use ms-MY voice)
-- [ ] Test with Chinese feed (should use zh-CN voice)
-- [ ] Test with English feed (should use en-US voice)
-- [ ] Test with feed without language tag (should auto-detect)
-
-## Files to Modify
-1. `app/src/main/java/com/adriana/newscompanion/service/util/LanguageUtil.java` (NEW)
-2. `app/src/main/java/com/adriana/newscompanion/data/feed/FeedRepository.java`
-3. `app/src/main/java/com/adriana/newscompanion/service/tts/TtsPlayer.java` (verify only)
+## Steps
+1. ✅ Update WebViewActivity.java loadEntryContent() - prepend titleToDisplay to contentForTts for full article view.
+2. ✅ Update TtsService.java onPrepareFromMediaId() - prepend appropriate title to content.
+3. ✅ Update TtsService.java prepareAndPlayCurrentTrack() - prepend title when getting content from DB.
+4. ✅ Ensure consistent use of ttsExtractor.delimiter in summary and translation handling.
+5. Test the changes.

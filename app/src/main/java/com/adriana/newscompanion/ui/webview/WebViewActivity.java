@@ -277,8 +277,8 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             loadHtmlIntoWebView(result.finalHtml, result.finalTitle);
 
             String targetLang = sharedPreferencesRepository.getDefaultTranslationLanguage();
-            String plainTextContent = textUtil.extractHtmlContent(result.finalHtml, "--####--");
-            String fullContentForTts = result.finalTitle + "--####--" + plainTextContent;
+            String plainTextContent = textUtil.extractHtmlContent(result.finalHtml, ttsExtractor.delimiter);
+            String fullContentForTts = result.finalTitle + ttsExtractor.delimiter + plainTextContent;
 
             if (!fullContentForTts.trim().isEmpty()) {
                 Log.d(TAG, "Manual translation finished. Updating TTS with language: " + targetLang);
@@ -516,8 +516,8 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 if (!p.trim().isEmpty()) htmlSummary.append("<p>").append(p).append("</p>");
             }
             htmlToLoad = htmlSummary.toString();
-            String processedSummary = summaryText.replace("\n\n", " --####-- ");
-            contentForTts = titleToDisplay + " --####-- " + processedSummary;
+            String processedSummary = summaryText.replace("\n\n", ttsExtractor.delimiter);
+            contentForTts = titleToDisplay + ttsExtractor.delimiter + processedSummary;
 
             langForTts = entryInfo.isAiSummaryTranslated()
                     ? sharedPreferencesRepository.getDefaultTranslationLanguage()
@@ -539,6 +539,10 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 titleToDisplay = entryInfo.getEntryTitle();
                 contentForTts = entryInfo.getContent();
                 langForTts = entryInfo.getFeedLanguage();
+            }
+            // Prepend title to content for TTS
+            if (titleToDisplay != null && !titleToDisplay.trim().isEmpty()) {
+                contentForTts = titleToDisplay + ttsExtractor.delimiter + contentForTts;
             }
             summarizeButton.setTitle("Show Summary");
             browserButton.setVisible(true);
