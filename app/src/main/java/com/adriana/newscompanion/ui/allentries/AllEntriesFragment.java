@@ -332,6 +332,7 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
     @Override
     public void onFilterChange(String filter) {
         this.filterBy = filter;
+        sharedPreferencesRepository.setFilterBy(filter);
         allEntriesViewModel.getEntriesByFeed(feedId, filter);
         binding.filterTitle.setText(filter.equals("all") ? title : filter + " (" + title + ")");
     }

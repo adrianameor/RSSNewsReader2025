@@ -253,6 +253,45 @@ public interface EntryDao {
     @Query("SELECT id FROM entry_table WHERE bookmark = 'Y' ORDER BY publishedDate DESC LIMIT :limit")
     List<Long> getBookmarkedIds(int limit);
 
+    @Query("SELECT id FROM entry_table WHERE bookmark = 'Y' ORDER BY publishedDate ASC LIMIT :limit")
+    List<Long> getBookmarkedIdsOldest(int limit);
+
+    @Query("SELECT id FROM entry_table WHERE bookmark = 'Y' AND feedId = :feedId ORDER BY publishedDate DESC LIMIT :limit")
+    List<Long> getBookmarkedIdsByFeedId(long feedId, int limit);
+
+    @Query("SELECT id FROM entry_table WHERE bookmark = 'Y' AND feedId = :feedId ORDER BY publishedDate ASC LIMIT :limit")
+    List<Long> getBookmarkedIdsByFeedIdOldest(long feedId, int limit);
+
+    @Query("SELECT id FROM entry_table WHERE visitedDate IS NOT NULL ORDER BY publishedDate DESC LIMIT :limit")
+    List<Long> getReadIds(int limit);
+
+    @Query("SELECT id FROM entry_table WHERE visitedDate IS NOT NULL ORDER BY publishedDate ASC LIMIT :limit")
+    List<Long> getReadIdsOldest(int limit);
+
+    @Query("SELECT id FROM entry_table WHERE visitedDate IS NOT NULL AND feedId = :feedId ORDER BY publishedDate DESC LIMIT :limit")
+    List<Long> getReadIdsByFeedId(long feedId, int limit);
+
+    @Query("SELECT id FROM entry_table WHERE visitedDate IS NOT NULL AND feedId = :feedId ORDER BY publishedDate ASC LIMIT :limit")
+    List<Long> getReadIdsByFeedIdOldest(long feedId, int limit);
+
+    @Query("SELECT id FROM entry_table WHERE visitedDate IS NULL ORDER BY publishedDate DESC LIMIT :limit")
+    List<Long> getUnreadIds(int limit);
+
+    @Query("SELECT id FROM entry_table WHERE visitedDate IS NULL ORDER BY publishedDate ASC LIMIT :limit")
+    List<Long> getUnreadIdsOldest(int limit);
+
+    @Query("SELECT id FROM entry_table WHERE visitedDate IS NULL AND feedId = :feedId ORDER BY publishedDate DESC LIMIT :limit")
+    List<Long> getUnreadIdsByFeedId(long feedId, int limit);
+
+    @Query("SELECT id FROM entry_table WHERE visitedDate IS NULL AND feedId = :feedId ORDER BY publishedDate ASC LIMIT :limit")
+    List<Long> getUnreadIdsByFeedIdOldest(long feedId, int limit);
+
+    @Query("SELECT id FROM entry_table ORDER BY publishedDate DESC LIMIT :limit")
+    List<Long> getAllArticleIds(int limit);
+
+    @Query("SELECT id FROM entry_table ORDER BY publishedDate ASC LIMIT :limit")
+    List<Long> getAllArticleIdsOldest(int limit);
+
     @Query("SELECT id FROM entry_table ORDER BY publishedDate IS NOT NULL, RANDOM() LIMIT :limit")
     List<Long> getRandomArticleIds(int limit);
 

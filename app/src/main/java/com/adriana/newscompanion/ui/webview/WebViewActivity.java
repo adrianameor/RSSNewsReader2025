@@ -575,7 +575,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         sharedPreferencesRepository.setCurrentTtsLang(langForTts);
 
         sharedPreferencesRepository.setCurrentReadingEntryId(currentId);
-        initializePlaylistSystem();
+        initializeSmartPlaylist();
         if (!isSummaryView) {
             syncLoadingWithTts();
         }
@@ -1624,50 +1624,22 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         playPauseButton.setIcon(ContextCompat.getDrawable(this, iconRes));
     }
 
-    private void initializePlaylistSystem() {
+    private void initializeSmartPlaylist() {
         long currentId = getIntent().getLongExtra("entry_id", -1);
         if (currentId != -1) {
-            EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
-            if (entryInfo != null) {
-                createOrUpdatePlaylist(currentId, entryInfo.getFeedId());
-            }
-        }
-    }
+            List<Long> playlistIds = entryRepository.getArticleIdsByCurrentSettings(1000);
 
-    private void createOrUpdatePlaylist(long currentEntryId, long feedId) {
-        Date latestPlaylistDate = playlistRepository.getLatestPlaylistCreatedDate();
-        boolean needsNewPlaylist = latestPlaylistDate == null ||
-                System.currentTimeMillis() - latestPlaylistDate.getTime() > 3600000; // 1 hour
-
-        if (needsNewPlaylist) {
-            List<Long> playlistIds = new ArrayList<>();
-
-            List<Long> feedArticles = entryRepository.getArticleIdsByFeedId(feedId, 15);
-            playlistIds.addAll(feedArticles);
-
-            List<Long> recentRead = entryRepository.getRecentlyReadIds(15);
-            playlistIds.addAll(recentRead);
-
-            List<Long> bookmarked = entryRepository.getBookmarkedIds(10);
-            playlistIds.addAll(bookmarked);
-
-            List<Long> random = entryRepository.getRandomArticleIds(10);
-            playlistIds.addAll(random);
-
-            if (!playlistIds.contains(currentEntryId)) {
-                playlistIds.add(0, currentEntryId);
+            if (!playlistIds.contains(currentId)) {
+                playlistIds.add(0, currentId);
             }
 
-            Set<Long> uniqueIds = new LinkedHashSet<>(playlistIds);
-            List<Long> finalList = new ArrayList<>(uniqueIds);
-            if (finalList.size() > 50) {
-                finalList = finalList.subList(0, 50);
+            if (playlistIds.size() > 50) {
+                playlistIds = playlistIds.subList(0, 50);
             }
 
-            String playlistString = TextUtils.join(",", finalList);
+            String playlistString = TextUtils.join(",", playlistIds);
             Playlist playlist = new Playlist(new Date(), playlistString);
-            playlist.setPlaylist(playlistString);
-            playlist.setCreatedDate(new Date());
+            playlistRepository.deleteAllPlaylists();
             playlistRepository.insert(playlist);
         }
     }

@@ -2,27 +2,15 @@ package com.adriana.newscompanion.service.tts;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
-import android.graphics.Bitmap;
-import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
-import android.util.JsonReader;
-import android.util.JsonToken;
 import android.util.Log;
-import android.webkit.ValueCallback;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
 
-import androidx.core.content.ContextCompat;
 import androidx.work.ExistingWorkPolicy;
 import androidx.work.OneTimeWorkRequest;
 import androidx.work.WorkContinuation;
 import androidx.work.WorkManager;
 
-import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
-import io.reactivex.rxjava3.core.Flowable;
-import io.reactivex.rxjava3.core.Single;
-import io.reactivex.rxjava3.schedulers.Schedulers;
 import com.adriana.newscompanion.data.entry.Entry;
 import com.adriana.newscompanion.data.entry.EntryRepository;
 import com.adriana.newscompanion.data.feed.FeedRepository;
@@ -41,7 +29,10 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 
-import java.io.StringReader;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
@@ -58,6 +49,8 @@ import io.reactivex.rxjava3.disposables.Disposable;
 @Singleton
 public class TtsExtractor {
 
+    private static final String USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36";
+
     private final CompositeDisposable disposables = new CompositeDisposable();
     private final String TAG = TtsExtractor.class.getSimpleName();
     private String currentLanguage;
@@ -68,7 +61,6 @@ public class TtsExtractor {
     private final PlaylistRepository playlistRepository;
     private final TextUtil textUtil;
     private final SharedPreferencesRepository sharedPreferencesRepository;
-    private WebView webView;
     private String currentLink;
     private String currentTitle;
     private long currentIdInProgress = -1;
@@ -82,12 +74,9 @@ public class TtsExtractor {
     private final List<Long> failedIds = new ArrayList<>();
     private final HashMap<Long, Integer> retryCountMap = new HashMap<>();
     private final int MAX_RETRIES = 3;
-    
-    private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
-    private Runnable watchdogRunnable;
-    private int loadCounter = 0;
 
-    @SuppressLint("SetJavaScriptEnabled")
+
+
     @Inject
     public TtsExtractor(@ApplicationContext Context context, TtsPlaylist ttsPlaylist, EntryRepository entryRepository, FeedRepository feedRepository, PlaylistRepository playlistRepository, TextUtil textUtil, SharedPreferencesRepository sharedPreferencesRepository) {
         this.context = context;
@@ -97,44 +86,26 @@ public class TtsExtractor {
         this.playlistRepository = playlistRepository;
         this.textUtil = textUtil;
         this.sharedPreferencesRepository = sharedPreferencesRepository;
-
-        initWebView();
-    }
-
-    private void initWebView() {
-        ContextCompat.getMainExecutor(context).execute(() -> {
-            if (webView != null) {
-                webView.destroy();
-            }
-            webView = new WebView(context);
-            webView.setWebViewClient(new WebClient());
-            webView.clearCache(true);
-            webView.getSettings().setJavaScriptEnabled(true);
-            webView.getSettings().setDomStorageEnabled(true);
-            Log.d(TAG, "WebView Engine Re-Initialized.");
-        });
     }
 
     public void extractAllEntries() {
         if (extractionInProgress) return;
 
-        if (loadCounter >= 20) {
-            Log.d(TAG, "Recycling WebView engine...");
-            loadCounter = 0;
-            initWebView();
-            new Handler(Looper.getMainLooper()).postDelayed(this::extractAllEntries, 3000);
-            return;
-        }
-
         Entry entry = entryRepository.getEmptyContentEntry();
 
         if (entry == null && !failedIds.isEmpty()) {
-            long retryId = failedIds.remove(0);
+            long retryId = failedIds.get(0); // peek first
             int attempts = retryCountMap.getOrDefault(retryId, 0);
             if (attempts < MAX_RETRIES) {
+                failedIds.remove(0);
                 retryCountMap.put(retryId, attempts + 1);
                 entry = entryRepository.getEntryById(retryId);
             } else {
+                // Permanent failure: mark as processed with empty content
+                failedIds.remove(0);
+                retryCountMap.remove(retryId);
+                entryRepository.updateContent("", retryId);
+                Log.w(TAG, "Permanently failed extraction for ID: " + retryId);
                 extractAllEntries();
                 return;
             }
@@ -146,35 +117,98 @@ public class TtsExtractor {
             currentLink = entry.getLink();
             currentTitle = entry.getTitle();
             delayTime = feedRepository.getDelayTimeById(entry.getFeedId());
-            loadCounter++;
 
-            Log.d(TAG, "Processing Article ID: " + currentIdInProgress + " [" + loadCounter + "/20]");
-            ContextCompat.getMainExecutor(context).execute(() -> webView.loadUrl(currentLink));
-            startWatchdog(45000);
+            Log.d(TAG, "Processing Article ID: " + currentIdInProgress);
+            if (currentLink.contains("video")) {
+                entryRepository.updateContent("", currentIdInProgress);
+                Log.d(TAG, "Skipped video URL: " + currentLink);
+                resetFlagsAndContinue();
+                return;
+            }
+            new Thread(() -> {
+                try {
+                    URL url = new URL(currentLink);
+                    HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                    connection.setRequestMethod("GET");
+                    connection.setRequestProperty("User-Agent", USER_AGENT);
+                    connection.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+                    connection.setConnectTimeout(10000);
+                    connection.setReadTimeout(15000);
+                    connection.setInstanceFollowRedirects(true);
+
+                    int responseCode = connection.getResponseCode();
+                    Log.d(TAG, "Fetching: " + currentLink + " | Status: " + responseCode);
+
+                    if (responseCode == HttpURLConnection.HTTP_OK) {
+                        BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+                        StringBuilder htmlBuilder = new StringBuilder();
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            htmlBuilder.append(line);
+                        }
+                        reader.close();
+
+                        String html = htmlBuilder.toString();
+                        if (html != null && !html.isEmpty()) {
+                            Readability4JExtended readability4J = new Readability4JExtended(currentLink, html);
+                            Article article = readability4J.parse();
+                            if (article.getContentWithUtf8Encoding() != null) {
+                                Document doc = Jsoup.parse(article.getContentWithUtf8Encoding());
+                                doc.select("h1").remove();
+                                doc.select("img").attr("style", "border-radius: 5px; width: 100%; margin-left:0");
+                                doc.select("figure").attr("style", "width: 100%; margin-left:0");
+                                doc.select("iframe").attr("style", "width: 100%; margin-left:0");
+
+                                List<String> tags = Arrays.asList("h2", "h3", "h4", "h5", "h6", "p", "td", "pre", "th", "li", "figcaption", "blockquote", "section");
+                                StringBuilder contentCollector = new StringBuilder();
+                                for (Element element : doc.getAllElements()) {
+                                    if (tags.contains(element.tagName())) {
+                                        boolean hasTagChild = false;
+                                        for (Element child : element.children()) if (tags.contains(child.tagName())) hasTagChild = true;
+                                        if (!hasTagChild) {
+                                            String text = element.text().trim();
+                                            if (text.length() > 1) {
+                                                if (contentCollector.length() > 0) contentCollector.append(delimiter);
+                                                contentCollector.append(text);
+                                            } else element.remove();
+                                        }
+                                    }
+                                }
+                                String finalFullText = contentCollector.toString();
+                                if (finalFullText.length() < 200 || finalFullText.toLowerCase().contains("please enable javascript")) {
+                                    failedIds.add(currentIdInProgress);
+                                } else {
+                                    entryRepository.updateHtml(doc.html(), currentIdInProgress);
+                                    if (entryRepository.getOriginalHtmlById(currentIdInProgress) == null) {
+                                        entryRepository.updateOriginalHtml(doc.html(), currentIdInProgress);
+                                        entryRepository.updateContent(finalFullText, currentIdInProgress);
+                                    }
+                                    Log.d(TAG, "✓ SUCCESS: ID " + currentIdInProgress + " finished.");
+                                }
+                            } else {
+                                failedIds.add(currentIdInProgress);
+                            }
+                        } else {
+                            failedIds.add(currentIdInProgress);
+                        }
+                    } else {
+                        Log.e(TAG, "HTTP Error " + responseCode + " for URL: " + currentLink);
+                        failedIds.add(currentIdInProgress);
+                    }
+                    connection.disconnect();
+                } catch (Exception e) {
+                    Log.e(TAG, "Error processing " + currentLink + ": " + e.getMessage());
+                    failedIds.add(currentIdInProgress);
+                } finally {
+                    resetFlagsAndContinue();
+                }
+            }).start();
         } else {
             Log.d(TAG, "No more articles in queue.");
             triggerAiPipelineChain();
         }
     }
 
-    private void startWatchdog(long timeout) {
-        cancelWatchdog();
-        watchdogRunnable = () -> {
-            if (extractionInProgress) {
-                Log.e(TAG, "!!! WATCHDOG TIMEOUT !!! ID: " + currentIdInProgress + ". Skipping.");
-                failedIds.add(currentIdInProgress);
-                resetFlagsAndContinue();
-            }
-        };
-        watchdogHandler.postDelayed(watchdogRunnable, timeout);
-    }
-
-    private void cancelWatchdog() {
-        if (watchdogRunnable != null) {
-            watchdogHandler.removeCallbacks(watchdogRunnable);
-            watchdogRunnable = null;
-        }
-    }
 
     private void resetFlagsAndContinue() {
         currentIdInProgress = -1;
@@ -239,74 +273,7 @@ public class TtsExtractor {
         extractAllEntries();
     }
 
-    public class WebClient extends WebViewClient {
-        private final Handler handler = new Handler();
-        @Override
-        public boolean shouldOverrideUrlLoading(WebView view, String url) { view.loadUrl(url); return true; }
 
-        @Override
-        public void onPageFinished(WebView view, String url) {
-            super.onPageFinished(view, url);
-            if (extractionInProgress && webView.getProgress() == 100) {
-                handler.postDelayed(() -> webView.evaluateJavascript("(function() {return document.getElementsByTagName('html')[0].outerHTML;})();", value -> {
-                    JsonReader reader = new JsonReader(new StringReader(value));
-                    reader.setLenient(true);
-                    StringBuilder contentCollector = new StringBuilder();
-                    try {
-                        if (reader.peek() == JsonToken.STRING) {
-                            String html = reader.nextString();
-                            if (html != null) {
-                                Readability4JExtended readability4J = new Readability4JExtended(currentLink, html);
-                                Article article = readability4J.parse();
-                                if (article.getContentWithUtf8Encoding() != null) {
-                                    Document doc = Jsoup.parse(article.getContentWithUtf8Encoding());
-                                    doc.select("h1").remove();
-                                    doc.select("img").attr("style", "border-radius: 5px; width: 100%; margin-left:0");
-                                    doc.select("figure").attr("style", "width: 100%; margin-left:0");
-                                    doc.select("iframe").attr("style", "width: 100%; margin-left:0");
-
-                                    List<String> tags = Arrays.asList("h2", "h3", "h4", "h5", "h6", "p", "td", "pre", "th", "li", "figcaption", "blockquote", "section");
-                                    for (Element element : doc.getAllElements()) {
-                                        if (tags.contains(element.tagName())) {
-                                            boolean hasTagChild = false;
-                                            for (Element child : element.children()) if (tags.contains(child.tagName())) hasTagChild = true;
-                                            if (!hasTagChild) {
-                                                String text = element.text().trim();
-                                                if (text.length() > 1) {
-                                                    if (contentCollector.length() > 0) contentCollector.append(delimiter);
-                                                    contentCollector.append(text);
-                                                } else element.remove();
-                                            }
-                                        }
-                                    }
-                                    String finalFullText = contentCollector.toString();
-                                    if (finalFullText.length() < 200 || finalFullText.toLowerCase().contains("please enable javascript")) {
-                                        failedIds.add(currentIdInProgress);
-                                    } else {
-                                        entryRepository.updateHtml(doc.html(), currentIdInProgress);
-                                        if (entryRepository.getOriginalHtmlById(currentIdInProgress) == null) {
-                                            entryRepository.updateOriginalHtml(doc.html(), currentIdInProgress);
-                                            entryRepository.updateContent(finalFullText, currentIdInProgress);
-                                        }
-                                        Log.d(TAG, "✓ SUCCESS: ID " + currentIdInProgress + " finished.");
-                                    }
-                                }
-                            }
-                        }
-                    } catch (Exception e) {
-                        failedIds.add(currentIdInProgress);
-                    } finally {
-                        cancelWatchdog();
-                        if (webViewCallback != null) {
-                            webViewCallback.finishedSetup();
-                            webViewCallback = null;
-                        }
-                        resetFlagsAndContinue();
-                    }
-                }), delayTime * 1000L);
-            }
-        }
-    }
 
     public void setCurrentLanguage(String lang, boolean lock) {
         if (!isLockedByTtsPlayer || lock) {

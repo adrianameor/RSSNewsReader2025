@@ -72,6 +72,14 @@ public class SharedPreferencesRepository {
         return sharedPreferences.getString("sortBy", "latest");
     }
 
+    public void setFilterBy(String filterBy) {
+        getEditor().putString("filterBy", filterBy).commit();
+    }
+
+    public String getFilterBy() {
+        return sharedPreferences.getString("filterBy", "all");
+    }
+
     public int getConfidenceThreshold() {
         return sharedPreferences.getInt("confidenceThreshold", 50);
     }

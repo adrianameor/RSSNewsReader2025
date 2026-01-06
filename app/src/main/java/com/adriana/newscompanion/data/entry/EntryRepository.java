@@ -427,6 +427,38 @@ public class EntryRepository {
         }
     }
 
+    public List<Long> getArticleIdsByFeedIdFiltered(long feedId, String filter, int limit) {
+        String sortBy = sharedPreferencesRepository.getSortBy();
+        if (feedId == 0) {
+            switch (filter) {
+                case "bookmark":
+                    return sortBy.equalsIgnoreCase("oldest") ? entryDao.getBookmarkedIdsOldest(limit) : entryDao.getBookmarkedIds(limit);
+                case "read":
+                    return sortBy.equalsIgnoreCase("oldest") ? entryDao.getReadIdsOldest(limit) : entryDao.getReadIds(limit);
+                case "unread":
+                    return sortBy.equalsIgnoreCase("oldest") ? entryDao.getUnreadIdsOldest(limit) : entryDao.getUnreadIds(limit);
+                default:
+                    return sortBy.equalsIgnoreCase("oldest") ? entryDao.getAllArticleIdsOldest(limit) : entryDao.getAllArticleIds(limit);
+            }
+        } else {
+            switch (filter) {
+                case "bookmark":
+                    return sortBy.equalsIgnoreCase("oldest") ? entryDao.getBookmarkedIdsByFeedIdOldest(feedId, limit) : entryDao.getBookmarkedIdsByFeedId(feedId, limit);
+                case "read":
+                    return sortBy.equalsIgnoreCase("oldest") ? entryDao.getReadIdsByFeedIdOldest(feedId, limit) : entryDao.getReadIdsByFeedId(feedId, limit);
+                case "unread":
+                    return sortBy.equalsIgnoreCase("oldest") ? entryDao.getUnreadIdsByFeedIdOldest(feedId, limit) : entryDao.getUnreadIdsByFeedId(feedId, limit);
+                default:
+                    return sortBy.equalsIgnoreCase("oldest") ? entryDao.getArticleIdsByFeedIdOldest(feedId, limit) : entryDao.getArticleIdsByFeedId(feedId, limit);
+            }
+        }
+    }
+
+    public List<Long> getArticleIdsByCurrentSettings(int limit) {
+        String filter = sharedPreferencesRepository.getFilterBy();
+        return getArticleIdsByFeedIdFiltered(0, filter, limit);
+    }
+
     public List<Long> getRecentlyReadIds(int limit) {
         return entryDao.getRecentlyReadIds(limit);
     }
