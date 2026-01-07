@@ -430,7 +430,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             return;
         }
 
-        boolean translationExists = entryInfo.getTranslatedTitle() != null && !entryInfo.getTranslatedTitle().equals(entryInfo.getEntryTitle());
+        boolean translationExists = entryInfo.getTranslated() != null && !entryInfo.getTranslated().trim().isEmpty();
         toggleTranslationButton.setVisible(translationExists);
 
         if (translationExists) {
@@ -572,6 +572,20 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         if (langForTts == null || langForTts.trim().isEmpty()) langForTts = "en";
         if (contentForTts != null && !contentForTts.trim().isEmpty()) {
             ttsPlayer.extract(currentId, feedId, contentForTts, langForTts);
+        }
+
+        if (!isReadingMode) {
+            boolean hasContent = contentForTts != null && !contentForTts.trim().isEmpty();
+            playPauseButton.setEnabled(hasContent);
+            skipNextButton.setEnabled(hasContent);
+            skipPreviousButton.setEnabled(hasContent);
+            fastForwardButton.setEnabled(hasContent);
+            rewindButton.setEnabled(hasContent);
+            playPauseButton.setAlpha(hasContent ? 1.0f : 0.5f);
+            skipNextButton.setAlpha(hasContent ? 1.0f : 0.5f);
+            skipPreviousButton.setAlpha(hasContent ? 1.0f : 0.5f);
+            fastForwardButton.setAlpha(hasContent ? 1.0f : 0.5f);
+            rewindButton.setAlpha(hasContent ? 1.0f : 0.5f);
         }
 
         // Store current TTS content and language in SharedPreferences for TtsService sync
@@ -1223,6 +1237,16 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                     loading.setVisibility(View.INVISIBLE);
                     functionButtons.setVisibility(View.VISIBLE);
                     functionButtons.setAlpha(1.0f);
+                    playPauseButton.setEnabled(true);
+                    skipNextButton.setEnabled(true);
+                    skipPreviousButton.setEnabled(true);
+                    fastForwardButton.setEnabled(true);
+                    rewindButton.setEnabled(true);
+                    playPauseButton.setAlpha(1.0f);
+                    skipNextButton.setAlpha(1.0f);
+                    skipPreviousButton.setAlpha(1.0f);
+                    fastForwardButton.setAlpha(1.0f);
+                    rewindButton.setAlpha(1.0f);
                 }
                 reloadButton.setVisible(true);
                 bookmarkButton.setVisible(true);
@@ -1569,6 +1593,20 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             bookmark = metadata.getString("bookmark");
             currentLink = metadata.getString("link");
             feedId = metadata.getLong("feedId");
+
+            if (!isReadingMode) {
+                boolean hasContent = content != null && !content.trim().isEmpty();
+                playPauseButton.setEnabled(hasContent);
+                skipNextButton.setEnabled(hasContent);
+                skipPreviousButton.setEnabled(hasContent);
+                fastForwardButton.setEnabled(hasContent);
+                rewindButton.setEnabled(hasContent);
+                playPauseButton.setAlpha(hasContent ? 1.0f : 0.5f);
+                skipNextButton.setAlpha(hasContent ? 1.0f : 0.5f);
+                skipPreviousButton.setAlpha(hasContent ? 1.0f : 0.5f);
+                fastForwardButton.setAlpha(hasContent ? 1.0f : 0.5f);
+                rewindButton.setAlpha(hasContent ? 1.0f : 0.5f);
+            }
 
             if (bookmark == null || bookmark.equals("N")) {
                 bookmarkButton.setIcon(R.drawable.ic_bookmark_outline);

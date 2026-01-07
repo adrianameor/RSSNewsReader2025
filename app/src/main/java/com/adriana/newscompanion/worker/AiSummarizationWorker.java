@@ -83,15 +83,15 @@ public class AiSummarizationWorker extends Worker {
 
                     if (summary != null && !summary.isEmpty()) {
                         feedRepository.getEntryRepository().updateSummary(summary, entry.getId());
-                        
-                        // 2. NEW: If Auto-Translate is ON, also translate the TITLE immediately
+
+                        // 2. If Auto-Translate is ON, also translate the TITLE immediately for summary display
                         if (autoTranslate) {
                             Feed feed = feedRepository.getFeedById(entry.getFeedId());
                             String sourceLang = (feed != null) ? feed.getLanguage() : "en";
-                            
+
                             Log.d(TAG, "Translating title for Summary page | ID: " + entry.getId());
                             String translatedTitle = translationRepository.translateText(entry.getTitle(), sourceLang, targetLang).blockingGet();
-                            
+
                             if (translatedTitle != null && !translatedTitle.isEmpty()) {
                                 feedRepository.getEntryRepository().updateTranslatedTitle(translatedTitle, entry.getId());
                             }
@@ -99,7 +99,7 @@ public class AiSummarizationWorker extends Worker {
 
                         // Mark as summarized
                         feedRepository.getEntryRepository().markAsAiSummarized(entry.getId(), autoTranslate);
-                        Log.d(TAG, "✓ ID: " + entry.getId() + " summarized (and title translated) successfully.");
+                        Log.d(TAG, "✓ ID: " + entry.getId() + " summarized (and title translated if autoTranslate) successfully.");
                     }
                 } catch (Exception e) {
                     Log.e(TAG, "Failed to summarize ID: " + entry.getId(), e);

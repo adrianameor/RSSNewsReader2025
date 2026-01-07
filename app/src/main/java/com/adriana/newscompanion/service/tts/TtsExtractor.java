@@ -25,6 +25,7 @@ import com.adriana.newscompanion.worker.TranslationWorker;
 import net.dankito.readability4j.Article;
 import net.dankito.readability4j.extended.Readability4JExtended;
 
+import org.json.JSONObject;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -91,10 +92,11 @@ public class TtsExtractor {
     public void extractAllEntries() {
         if (extractionInProgress) return;
 
-        Entry entry = entryRepository.getEmptyContentEntry();
+        Entry entry = null;
 
-        if (entry == null && !failedIds.isEmpty()) {
-            long retryId = failedIds.get(0); // peek first
+        // Prioritize retries over new empty entries
+        if (!failedIds.isEmpty()) {
+            long retryId = failedIds.get(0);
             int attempts = retryCountMap.getOrDefault(retryId, 0);
             if (attempts < MAX_RETRIES) {
                 failedIds.remove(0);
@@ -111,6 +113,11 @@ public class TtsExtractor {
             }
         }
 
+        // If no retries, get a new empty entry
+        if (entry == null) {
+            entry = entryRepository.getEmptyContentEntry();
+        }
+
         if (entry != null) {
             extractionInProgress = true;
             currentIdInProgress = entry.getId();
@@ -119,7 +126,7 @@ public class TtsExtractor {
             delayTime = feedRepository.getDelayTimeById(entry.getFeedId());
 
             Log.d(TAG, "Processing Article ID: " + currentIdInProgress);
-            if (currentLink.contains("video")) {
+            if (!currentLink.contains("hmetro.com.my") && currentLink.contains("video")) {
                 entryRepository.updateContent("", currentIdInProgress);
                 Log.d(TAG, "Skipped video URL: " + currentLink);
                 resetFlagsAndContinue();
@@ -150,6 +157,22 @@ public class TtsExtractor {
 
                         String html = htmlBuilder.toString();
                         if (html != null && !html.isEmpty()) {
+                            // Special handling for hmetro.com.my: extract article body from JSON to avoid footer-only extraction
+                            if (currentLink.contains("hmetro.com.my")) {
+                                Document fullDoc = Jsoup.parse(html);
+                                Element articleComponent = fullDoc.select("article-component").first();
+                                if (articleComponent != null) {
+                                    String articleJson = articleComponent.attr(":article");
+                                    try {
+                                        JSONObject json = new JSONObject(articleJson);
+                                        String body = json.getString("body");
+                                        html = body; // Use the body HTML for Readability4J
+                                        Log.d(TAG, "Using body from JSON for hmetro.com.my");
+                                    } catch (Exception e) {
+                                        Log.e(TAG, "Failed to parse JSON for hmetro: " + e.getMessage());
+                                    }
+                                }
+                            }
                             Readability4JExtended readability4J = new Readability4JExtended(currentLink, html);
                             Article article = readability4J.parse();
                             if (article.getContentWithUtf8Encoding() != null) {
@@ -176,6 +199,7 @@ public class TtsExtractor {
                                 }
                                 String finalFullText = contentCollector.toString();
                                 if (finalFullText.length() < 200 || finalFullText.toLowerCase().contains("please enable javascript")) {
+                                    Log.d(TAG, "Extraction failed for ID: " + currentIdInProgress + " | Length: " + finalFullText.length() + " | Contains JS: " + finalFullText.toLowerCase().contains("please enable javascript") + " | Snippet: " + finalFullText.substring(0, Math.min(100, finalFullText.length())));
                                     failedIds.add(currentIdInProgress);
                                 } else {
                                     entryRepository.updateHtml(doc.html(), currentIdInProgress);
