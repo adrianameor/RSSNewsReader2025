@@ -3,6 +3,7 @@ package com.adriana.newscompanion.service.tts;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.graphics.Bitmap;
+import java.net.HttpURLConnection;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
@@ -12,6 +13,9 @@ import android.util.Log;
 import android.webkit.ValueCallback;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 
 import androidx.core.content.ContextCompat;
 import androidx.work.ExistingWorkPolicy;
@@ -46,6 +50,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 
 import javax.inject.Inject;
@@ -82,7 +87,8 @@ public class TtsExtractor {
     private final List<Long> failedIds = new ArrayList<>();
     private final HashMap<Long, Integer> retryCountMap = new HashMap<>();
     private final int MAX_RETRIES = 3;
-    
+    private final HashSet<Long> feedsRequiringWebView = new HashSet<>();
+
     private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
     private Runnable watchdogRunnable;
     private int loadCounter = 0;
@@ -113,6 +119,104 @@ public class TtsExtractor {
             webView.getSettings().setDomStorageEnabled(true);
             Log.d(TAG, "WebView Engine Re-Initialized.");
         });
+    }
+
+    private void extractWithHttp(Entry entry) {
+        // Start watchdog for HTTP extraction (30 seconds timeout)
+        startWatchdog(30000);
+
+        new Thread(() -> {
+            HttpURLConnection connection = null;
+            try {
+                java.net.URL url = new java.net.URL(entry.getLink());
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(30000);
+                connection.setReadTimeout(30000);
+                connection.connect();
+
+                int responseCode = connection.getResponseCode();
+                if (responseCode != HttpURLConnection.HTTP_OK) {
+                    Log.e(TAG, "HTTP Error " + responseCode + " for URL: " + entry.getLink());
+                    failedIds.add(currentIdInProgress);
+                    resetFlagsAndContinue();
+                    return;
+                }
+
+                BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+                StringBuilder htmlBuilder = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    htmlBuilder.append(line);
+                }
+                reader.close();
+
+                String html = htmlBuilder.toString();
+                Readability4JExtended readability4J = new Readability4JExtended(entry.getLink(), html);
+                Article article = readability4J.parse();
+
+                if (article.getContentWithUtf8Encoding() != null) {
+                    Document doc = Jsoup.parse(article.getContentWithUtf8Encoding());
+                    doc.select("h1").remove();
+                    doc.select("img").attr("style", "border-radius: 5px; max-width: 100%; max-height: 600px; height: auto; width: auto; object-fit: contain; margin-left:0");
+                    doc.select("figure").attr("style", "width: 100%; max-height: 650px; overflow: hidden; margin: 1em 0; margin-left:0");
+                    doc.select("iframe").attr("style", "width: 100%; margin-left:0");
+
+                    StringBuilder contentCollector = new StringBuilder();
+                    List<String> tags = Arrays.asList("h2", "h3", "h4", "h5", "h6", "p", "td", "pre", "th", "li", "figcaption", "blockquote", "section");
+                    for (Element element : doc.getAllElements()) {
+                        if (tags.contains(element.tagName())) {
+                            boolean hasTagChild = false;
+                            for (Element child : element.children()) if (tags.contains(child.tagName())) hasTagChild = true;
+                            if (!hasTagChild) {
+                                String text = element.text().trim();
+                                if (text.length() > 1) {
+                                    if (contentCollector.length() > 0) contentCollector.append(delimiter);
+                                    contentCollector.append(text);
+                                } else element.remove();
+                            }
+                        }
+                    }
+                    String finalFullText = contentCollector.toString();
+                    if (finalFullText.length() < 200 || finalFullText.toLowerCase().contains("please enable javascript")) {
+                        // Fallback to WebView: Flag this feed as requiring WebView for future articles
+                        com.adriana.newscompanion.data.feed.Feed feed = feedRepository.getFeedById(entry.getFeedId());
+                        if (feed != null) {
+                            feedsRequiringWebView.add(feed.getId());
+                            Log.d(TAG, "Feed " + feed.getId() + " flagged for WebView extraction due to JavaScript-heavy content");
+                        }
+                        failedIds.add(currentIdInProgress);
+                    } else {
+                        entryRepository.updateHtml(doc.html(), currentIdInProgress);
+                        if (entryRepository.getOriginalHtmlById(currentIdInProgress) == null) {
+                            entryRepository.updateOriginalHtml(doc.html(), currentIdInProgress);
+                            entryRepository.updateContent(finalFullText, currentIdInProgress);
+                        }
+                        Log.d(TAG, "✓ HTTP SUCCESS: ID " + currentIdInProgress + " finished.");
+                    }
+                } else {
+                    failedIds.add(currentIdInProgress);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "HTTP extraction error for ID " + currentIdInProgress + ": " + e.getMessage());
+                failedIds.add(currentIdInProgress);
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+                cancelWatchdog();
+                if (webViewCallback != null) {
+                    webViewCallback.finishedSetup();
+                    webViewCallback = null;
+                }
+                resetFlagsAndContinue();
+            }
+        }).start();
+    }
+
+    private void extractWithWebView(Entry entry) {
+        ContextCompat.getMainExecutor(context).execute(() -> webView.loadUrl(entry.getLink()));
+        startWatchdog(45000);
     }
 
     public void extractAllEntries() {
@@ -148,9 +252,15 @@ public class TtsExtractor {
             delayTime = feedRepository.getDelayTimeById(entry.getFeedId());
             loadCounter++;
 
-            Log.d(TAG, "Processing Article ID: " + currentIdInProgress + " [" + loadCounter + "/20]");
-            ContextCompat.getMainExecutor(context).execute(() -> webView.loadUrl(currentLink));
-            startWatchdog(45000);
+            // Router: Check if feed requires authentication or has been flagged for WebView
+            com.adriana.newscompanion.data.feed.Feed feed = feedRepository.getFeedById(entry.getFeedId());
+            if (feed != null && (feed.isAuthenticated() || feedsRequiringWebView.contains(feed.getId()))) {
+                Log.d(TAG, "Processing Article ID: " + currentIdInProgress + " [" + loadCounter + "/20] - Using WebView (authenticated or flagged)");
+                extractWithWebView(entry);
+            } else {
+                Log.d(TAG, "Processing Article ID: " + currentIdInProgress + " [" + loadCounter + "/20] - Using HTTP (non-authenticated)");
+                extractWithHttp(entry);
+            }
         } else {
             Log.d(TAG, "No more articles in queue.");
             triggerAiPipelineChain();
@@ -261,8 +371,8 @@ public class TtsExtractor {
                                 if (article.getContentWithUtf8Encoding() != null) {
                                     Document doc = Jsoup.parse(article.getContentWithUtf8Encoding());
                                     doc.select("h1").remove();
-                                    doc.select("img").attr("style", "border-radius: 5px; width: 100%; margin-left:0");
-                                    doc.select("figure").attr("style", "width: 100%; margin-left:0");
+                                    doc.select("img").attr("style", "border-radius: 5px; max-width: 100%; max-height: 600px; height: auto; width: auto; object-fit: contain; margin-left:0");
+                                    doc.select("figure").attr("style", "width: 100%; max-height: 650px; overflow: hidden; margin: 1em 0; margin-left:0");
                                     doc.select("iframe").attr("style", "width: 100%; margin-left:0");
 
                                     List<String> tags = Arrays.asList("h2", "h3", "h4", "h5", "h6", "p", "td", "pre", "th", "li", "figcaption", "blockquote", "section");

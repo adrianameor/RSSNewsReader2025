@@ -129,10 +129,14 @@ public class FeedViewModel extends ViewModel {
     }
 
     public void addNewFeed(RssFeed feed) {
+        addNewFeed(feed, false);
+    }
+
+    public void addNewFeed(RssFeed feed, boolean requiresLogin) {
         Completable.fromAction(new Action() {
             @Override
             public void run() throws Throwable {
-                feedRepository.addNewFeed(feed);
+                feedRepository.addNewFeed(feed, requiresLogin);
             }
         }).subscribeOn(Schedulers.io())
                 .observeOn(AndroidSchedulers.mainThread())

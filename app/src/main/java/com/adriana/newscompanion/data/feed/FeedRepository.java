@@ -157,7 +157,7 @@ public class FeedRepository {
                 });
     }
 
-    public void addNewFeed(RssFeed feed) {
+    public void addNewFeed(RssFeed feed, boolean requiresLogin) {
         // --- INTELLIGENT DETECTION: Don't trust "en" blindly from RSS ---
         String rssLanguage = feed.getLanguage();
         
@@ -166,7 +166,7 @@ public class FeedRepository {
 
         if (!needsVerification) {
             Log.d(TAG, "Using language from RSS feed: " + rssLanguage + " for feed: " + feed.getLink());
-            saveFeedAndEntries(feed, rssLanguage);
+            saveFeedAndEntries(feed, rssLanguage, requiresLogin);
             return;
         }
         
@@ -183,7 +183,7 @@ public class FeedRepository {
         }
 
         if (sampleText.toString().trim().isEmpty()) {
-            saveFeedAndEntries(feed, (rssLanguage != null) ? rssLanguage : "en");
+            saveFeedAndEntries(feed, (rssLanguage != null) ? rssLanguage : "en", requiresLogin);
             return;
         }
 
@@ -194,26 +194,28 @@ public class FeedRepository {
                         identifiedLanguage -> {
                             if (identifiedLanguage != null && !identifiedLanguage.equalsIgnoreCase("und")) {
                                 Log.d(TAG, "Verification Success: Detected '" + identifiedLanguage + "' for feed: " + feed.getLink());
-                                saveFeedAndEntries(feed, identifiedLanguage);
+                                saveFeedAndEntries(feed, identifiedLanguage, requiresLogin);
                             } else {
                                 Log.w(TAG, "Verification ambiguous. Defaulting to: " + rssLanguage);
-                                saveFeedAndEntries(feed, (rssLanguage != null) ? rssLanguage : "en");
+                                saveFeedAndEntries(feed, (rssLanguage != null) ? rssLanguage : "en", requiresLogin);
                             }
                         },
                         error -> {
-                            saveFeedAndEntries(feed, (rssLanguage != null) ? rssLanguage : "en");
+                            saveFeedAndEntries(feed, (rssLanguage != null) ? rssLanguage : "en", requiresLogin);
                         }
                 );
 
         disposables.add(languageDetectionDisposable);
     }
 
-    private void saveFeedAndEntries(RssFeed feed, String languageCode) {
+    private void saveFeedAndEntries(RssFeed feed, String languageCode, boolean requiresLogin) {
         String normalizedLanguage = LanguageUtil.normalizeLanguageCode(languageCode);
         Log.d(TAG, "Saving feed with normalized language: " + normalizedLanguage);
-        
+
         String imageUrl = "https://www.google.com/s2/favicons?sz=64&domain_url=" + feed.getLink();
         Feed newFeed = new Feed(feed.getTitle(), feed.getLink(), feed.getDescription(), imageUrl, normalizedLanguage);
+        newFeed.setRequiresLogin(requiresLogin);
+        if (requiresLogin) newFeed.setAuthenticated(true);
 
         feedDao.insert(newFeed);
         long feedId = feedDao.getIdByLink(feed.getLink());

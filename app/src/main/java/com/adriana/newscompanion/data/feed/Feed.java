@@ -21,6 +21,10 @@ public class Feed {
     private String language;
     @ColumnInfo(defaultValue = "0")
     private boolean isPreloaded;
+    @ColumnInfo(defaultValue = "0")
+    private boolean requiresLogin = false;
+    @ColumnInfo(defaultValue = "0")
+    private boolean isAuthenticated = false;
 
     public Feed(String title, String link, String description, String imageUrl, String language) {
         this.title = title;
@@ -124,5 +128,21 @@ public class Feed {
 
     public void setPreloaded(boolean preloaded) {
         isPreloaded = preloaded;
+    }
+
+    public boolean isRequiresLogin() {
+        return requiresLogin;
+    }
+
+    public void setRequiresLogin(boolean requiresLogin) {
+        this.requiresLogin = requiresLogin;
+    }
+
+    public boolean isAuthenticated() {
+        return isAuthenticated;
+    }
+
+    public void setAuthenticated(boolean authenticated) {
+        isAuthenticated = authenticated;
     }
 }

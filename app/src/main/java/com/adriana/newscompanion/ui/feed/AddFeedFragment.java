@@ -40,7 +40,7 @@ public class AddFeedFragment extends Fragment implements FeedViewModel.AddFeedCa
     private final ActivityResultLauncher<Intent> activityResultLauncher = registerForActivityResult(
             new ActivityResultContracts.StartActivityForResult(), result -> {
                 if (result.getResultCode() == Activity.RESULT_OK) {
-                    feedViewModel.addNewFeed(feed);
+                    feedViewModel.addNewFeed(feed, true);
                 } else {
                     // User cancelled login - show feedback
                     Snackbar.make(requireView(), R.string.feed_not_added_login_cancelled, Snackbar.LENGTH_SHORT).show();
@@ -103,7 +103,7 @@ public class AddFeedFragment extends Fragment implements FeedViewModel.AddFeedCa
                 .setIcon(R.drawable.ic_alert)
                 .setMessage(R.string.login_message)
                 .setNeutralButton(R.string.no, (dialogInterface, i) -> {
-                    feedViewModel.addNewFeed(feed);
+                    feedViewModel.addNewFeed(feed, false);
                 })
                 .setPositiveButton(R.string.yes, (dialogInterface, i) -> {
                     if (feed.getRssItems().size() > 0) {
@@ -114,10 +114,10 @@ public class AddFeedFragment extends Fragment implements FeedViewModel.AddFeedCa
                             intent.putExtra("link", rssItem.getLink());
                             activityResultLauncher.launch(intent);
                         } else {
-                            feedViewModel.addNewFeed(feed);
+                            feedViewModel.addNewFeed(feed, false);
                         }
                     } else {
-                        feedViewModel.addNewFeed(feed);
+                        feedViewModel.addNewFeed(feed, false);
                     }
                 })
                 .show();
