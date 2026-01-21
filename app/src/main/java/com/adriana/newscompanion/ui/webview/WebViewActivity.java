@@ -532,12 +532,12 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             if (isTranslatedView && translationExists) {
                 htmlToLoad = currentHtml; // Cleaned + Translated
                 titleToDisplay = entryInfo.getTranslatedTitle();
-                contentForTts = entryInfo.getTranslated();
+                contentForTts = titleToDisplay + " --####-- " + entryInfo.getTranslated();
                 langForTts = sharedPreferencesRepository.getDefaultTranslationLanguage();
             } else {
                 htmlToLoad = originalHtml; // Cleaned Original (Fixed by worker)
                 titleToDisplay = entryInfo.getEntryTitle();
-                contentForTts = entryInfo.getContent();
+                contentForTts = titleToDisplay + " --####-- " + entryInfo.getContent();
                 langForTts = entryInfo.getFeedLanguage();
             }
             summarizeButton.setTitle("Show Summary");
