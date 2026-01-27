@@ -1522,8 +1522,31 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         @Override
         public void onPlaybackStateChanged(PlaybackStateCompat state) {
             super.onPlaybackStateChanged(state);
-            isPlaying = state != null && state.getState() == PlaybackStateCompat.STATE_PLAYING;
+            if (state == null) return;
+            
+            isPlaying = state.getState() == PlaybackStateCompat.STATE_PLAYING;
             updatePlayPauseButtonIcon(isPlaying);
+            
+            // Handle STOPPED state to reset UI
+            if (state.getState() == PlaybackStateCompat.STATE_STOPPED) {
+                playPauseButton.setIconResource(R.drawable.ic_play);
+                playPauseButton.setEnabled(true);
+                Log.d(TAG, "Playback stopped, UI reset to play button");
+            }
+        }
+        
+        @Override
+        public void onExtrasChanged(Bundle extras) {
+            super.onExtrasChanged(extras);
+            if (extras != null) {
+                String errorMessage = extras.getString("ERROR_MESSAGE");
+                if (errorMessage != null) {
+                    // Display error message via Snackbar
+                    // DO NOT write back to session to avoid infinite loops
+                    makeSnackbar(errorMessage);
+                    Log.d(TAG, "Error message received from service: " + errorMessage);
+                }
+            }
         }
 
         @Override

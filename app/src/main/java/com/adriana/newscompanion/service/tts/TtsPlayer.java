@@ -207,7 +207,7 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
     }
 
     public boolean extract(long currentId, long feedId, String content, String language) {
-        Log.d(TAG, "Starting extract for article: ID=" + currentId);
+        Log.d(TAG, "Starting extract for article: ID=" + currentId + ", language=" + language);
 
         // --- 1. CAPTURE LIVE STATE BEFORE RESET ---
         int currentSentence = -1;
@@ -237,6 +237,25 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
 
         if (language != null && !language.isEmpty()) {
             ttsExtractor.setCurrentLanguage(language, true);
+        }
+
+        // --- 2.5. SET TTS LANGUAGE IMMEDIATELY AFTER STATE RESET ---
+        if (tts != null && language != null && !language.isEmpty()) {
+            try {
+                Log.d(TAG, "Setting TTS language to: " + language);
+                Locale targetLocale = Locale.forLanguageTag(language);
+                int result = tts.setLanguage(targetLocale);
+                
+                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    Log.e(TAG, "Language not supported by TTS engine: " + language + ". Falling back to default.");
+                    tts.setLanguage(Locale.getDefault());
+                } else {
+                    Log.d(TAG, "TTS language successfully set to: " + targetLocale.getDisplayName());
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error setting TTS language: " + language, e);
+                tts.setLanguage(Locale.getDefault());
+            }
         }
 
         if (content == null || content.trim().isEmpty()) {

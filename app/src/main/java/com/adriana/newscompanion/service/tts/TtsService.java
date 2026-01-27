@@ -38,6 +38,7 @@ import com.adriana.newscompanion.ui.webview.WebViewListener;
 public class TtsService extends MediaBrowserServiceCompat {
     private final CompositeDisposable disposables = new CompositeDisposable();
     private static final String TAG = "TtsService";
+    private static final int MINIMUM_TTS_CONTENT_LENGTH = 100;
 
     @Inject
     TtsPlayer ttsPlayer;
@@ -49,6 +50,8 @@ public class TtsService extends MediaBrowserServiceCompat {
     EntryRepository entryRepository;
     @Inject
     PlaylistRepository playlistRepository;
+    @Inject
+    TtsExtractor ttsExtractor;
     private TtsNotification ttsNotification;
     private static MediaSessionCompat mediaSession;
     private MediaMetadataCompat preparedData;
@@ -156,6 +159,41 @@ public class TtsService extends MediaBrowserServiceCompat {
                 return;
             }
 
+            // --- EARLY READINESS CHECK (Main Thread) ---
+            Entry quickCheckEntry = entryRepository.getEntryById(entryId);
+            if (quickCheckEntry != null) {
+                String quickCheckContent = sharedPreferencesRepository.getCurrentTtsContent();
+                if (quickCheckContent == null || quickCheckContent.trim().isEmpty()) {
+                    boolean isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(entryId);
+                    quickCheckContent = (isTranslatedView && quickCheckEntry.getTranslated() != null && !quickCheckEntry.getTranslated().trim().isEmpty())
+                            ? quickCheckEntry.getTranslated()
+                            : quickCheckEntry.getContent();
+                }
+                
+                if (quickCheckContent == null || quickCheckContent.trim().length() < MINIMUM_TTS_CONTENT_LENGTH) {
+                    Log.w(TAG, "Content not ready for TTS. Length: " + (quickCheckContent != null ? quickCheckContent.trim().length() : 0) + 
+                            " (minimum required: " + MINIMUM_TTS_CONTENT_LENGTH + ")");
+                    isPreparing = false;
+                    
+                    PlaybackStateCompat stoppedState = new PlaybackStateCompat.Builder()
+                            .setState(PlaybackStateCompat.STATE_STOPPED, 0, 1.0f)
+                            .setActions(
+                                    PlaybackStateCompat.ACTION_PLAY |
+                                    PlaybackStateCompat.ACTION_PAUSE |
+                                    PlaybackStateCompat.ACTION_SKIP_TO_NEXT |
+                                    PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+                            )
+                            .build();
+                    mediaSession.setPlaybackState(stoppedState);
+                    
+                    Bundle errorExtras = new Bundle();
+                    errorExtras.putString("ERROR_MESSAGE", "Article is still being prepared. Please try again in a moment.");
+                    mediaSession.setExtras(errorExtras);
+                    return;
+                }
+            }
+            // --- END OF EARLY READINESS CHECK ---
+
             Disposable onPrepareDisposable = Completable.fromAction(() -> {
                         Log.e("LIFECYCLE_DEBUG", "3. onPrepareFromMediaId: Background task STARTED.");
 
@@ -194,6 +232,16 @@ public class TtsService extends MediaBrowserServiceCompat {
                             ttsPlayer.initTts(TtsService.this, new TtsPlayerListener(), callback);
                         }
 
+                        // Get the entry to determine feedId
+                        Entry entry = entryRepository.getEntryById(entryId);
+                        if (entry == null) {
+                            throw new IllegalStateException("Entry not found for ID: " + entryId);
+                        }
+                        
+                        // CRITICAL: Ensure feed language is detected BEFORE proceeding
+                        String detectedFeedLanguage = ttsExtractor.ensureFeedLanguageDetected(entry.getFeedId());
+                        Log.d(TAG, "Feed language ensured for entry " + entryId + ": " + detectedFeedLanguage);
+                        
                         // First, try to get content and language from SharedPreferences (set by WebViewActivity)
                         String content = sharedPreferencesRepository.getCurrentTtsContent();
                         String languageToUse = sharedPreferencesRepository.getCurrentTtsLang();
@@ -201,23 +249,18 @@ public class TtsService extends MediaBrowserServiceCompat {
                         // Fallback to DB content if not set in SharedPreferences
                         if (content == null || content.trim().isEmpty()) {
                             boolean isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(entryId);
-                            Entry entry = entryRepository.getEntryById(entryId);
-                            if (entry == null) {
-                                throw new IllegalStateException("Entry not found for ID: " + entryId);
-                            }
 
                             String original = entry.getContent();
                             String translated = entry.getTranslated();
                             content = (isTranslatedView && translated != null && !translated.trim().isEmpty()) ? translated : original;
 
-                            EntryInfo entryInfo = entryRepository.getEntryInfoById(entryId);
-                            String feedLanguage = (entryInfo != null && entryInfo.getFeedLanguage() != null) ? entryInfo.getFeedLanguage() : "en";
+                            // Use the freshly detected/verified feed language
                             String targetLanguage = sharedPreferencesRepository.getDefaultTranslationLanguage();
-                            languageToUse = isTranslatedView ? targetLanguage : feedLanguage;
+                            languageToUse = isTranslatedView ? targetLanguage : detectedFeedLanguage;
                         }
 
                         ttsPlayer.stopTtsPlayback();
-                        ttsPlayer.extract(entryId, entryRepository.getEntryById(entryId).getFeedId(), content, languageToUse);
+                        ttsPlayer.extract(entryId, entry.getFeedId(), content, languageToUse);
                     })
                     .subscribeOn(Schedulers.newThread())
                     .observeOn(AndroidSchedulers.mainThread())
@@ -238,7 +281,24 @@ public class TtsService extends MediaBrowserServiceCompat {
                         }*/
                     }, error -> {
                         Log.e("LIFECYCLE_DEBUG", "--- X. onPrepareFromMediaId onError (Main Thread) ---", error);
-                    isPreparing = false;
+                        isPreparing = false;
+                        
+                        // Set STATE_STOPPED to indicate playback cannot proceed
+                        PlaybackStateCompat stoppedState = new PlaybackStateCompat.Builder()
+                                .setState(PlaybackStateCompat.STATE_STOPPED, 0, 1.0f)
+                                .setActions(
+                                        PlaybackStateCompat.ACTION_PLAY |
+                                        PlaybackStateCompat.ACTION_PAUSE |
+                                        PlaybackStateCompat.ACTION_SKIP_TO_NEXT |
+                                        PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+                                )
+                                .build();
+                        mediaSession.setPlaybackState(stoppedState);
+                        
+                        // Send error message via extras for UI to display (for real errors only)
+                        Bundle errorExtras = new Bundle();
+                        errorExtras.putString("ERROR_MESSAGE", "An unexpected error occurred. Please try again.");
+                        mediaSession.setExtras(errorExtras);
                     });
 
             disposables.add(onPrepareDisposable);
@@ -361,10 +421,58 @@ public class TtsService extends MediaBrowserServiceCompat {
             long entryId = Long.parseLong(preparedData.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID));
             sharedPreferencesRepository.setCurrentReadingEntryId(entryId);
 
+            // --- EARLY READINESS CHECK (Main Thread) ---
+            Entry quickCheckEntry = entryRepository.getEntryById(entryId);
+            if (quickCheckEntry != null) {
+                String quickCheckContent = sharedPreferencesRepository.getCurrentTtsContent();
+                if (quickCheckContent == null || quickCheckContent.trim().isEmpty()) {
+                    boolean isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(entryId);
+                    quickCheckContent = (isTranslatedView && quickCheckEntry.getTranslated() != null && !quickCheckEntry.getTranslated().trim().isEmpty())
+                            ? quickCheckEntry.getTranslated()
+                            : quickCheckEntry.getContent();
+                }
+                
+                if (quickCheckContent == null || quickCheckContent.trim().length() < MINIMUM_TTS_CONTENT_LENGTH) {
+                    Log.w(TAG, "Content not ready for TTS in prepareAndPlayCurrentTrack. Length: " + 
+                            (quickCheckContent != null ? quickCheckContent.trim().length() : 0) + 
+                            " (minimum required: " + MINIMUM_TTS_CONTENT_LENGTH + ")");
+                    
+                    // Reset isPreparing flag to allow future attempts
+                    isPreparing = false;
+                    
+                    PlaybackStateCompat stoppedState = new PlaybackStateCompat.Builder()
+                            .setState(PlaybackStateCompat.STATE_STOPPED, 0, 1.0f)
+                            .setActions(
+                                    PlaybackStateCompat.ACTION_PLAY |
+                                    PlaybackStateCompat.ACTION_PAUSE |
+                                    PlaybackStateCompat.ACTION_SKIP_TO_NEXT |
+                                    PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+                            )
+                            .build();
+                    mediaSession.setPlaybackState(stoppedState);
+                    
+                    Bundle errorExtras = new Bundle();
+                    errorExtras.putString("ERROR_MESSAGE", "Article is still being prepared. Please try again in a moment.");
+                    mediaSession.setExtras(errorExtras);
+                    return;
+                }
+            }
+            // --- END OF EARLY READINESS CHECK ---
+
             // This is our single, reliable background task for track changes
             Disposable trackPreparationDisposable = Completable.fromAction(() -> {
                         // --- THIS IS THE FINAL, CORRECT FLOW ---
-                        // 1. Get the content for the player.
+                        // 1. Get the entry to determine feedId
+                        Entry entry = entryRepository.getEntryById(entryId);
+                        if (entry == null) {
+                            throw new IllegalStateException("Entry not found for ID: " + entryId);
+                        }
+                        
+                        // 2. CRITICAL: Ensure feed language is detected BEFORE proceeding
+                        String detectedFeedLanguage = ttsExtractor.ensureFeedLanguageDetected(entry.getFeedId());
+                        Log.d(TAG, "Feed language ensured for entry " + entryId + ": " + detectedFeedLanguage);
+                        
+                        // 3. Get the content for the player.
                         // First, try to get content and language from SharedPreferences (set by WebViewActivity)
                         String content = sharedPreferencesRepository.getCurrentTtsContent();
                         String languageToUse = sharedPreferencesRepository.getCurrentTtsLang();
@@ -372,20 +480,17 @@ public class TtsService extends MediaBrowserServiceCompat {
                         // Fallback to DB content if not set in SharedPreferences
                         if (content == null || content.trim().isEmpty()) {
                             boolean isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(entryId);
-                            Entry entry = entryRepository.getEntryById(entryId);
-                            if (entry == null) {
-                                throw new IllegalStateException("Entry not found for ID: " + entryId);
-                            }
                             content = (isTranslatedView && entry.getTranslated() != null && !entry.getTranslated().trim().isEmpty())
                                     ? entry.getTranslated()
                                     : entry.getContent();
+                            // Use the freshly detected/verified feed language
                             languageToUse = (isTranslatedView)
                                     ? sharedPreferencesRepository.getDefaultTranslationLanguage()
-                                    : entryRepository.getEntryInfoById(entryId).getFeedLanguage();
+                                    : detectedFeedLanguage;
                         }
 
-                        // 2. Call the synchronous extract method on this background thread.
-                        boolean success = ttsPlayer.extract(entryId, entryRepository.getEntryById(entryId).getFeedId(), content, languageToUse);
+                        // 4. Call the synchronous extract method on this background thread.
+                        boolean success = ttsPlayer.extract(entryId, entry.getFeedId(), content, languageToUse);
                         if (!success) {
                             throw new IllegalStateException("Extraction failed for entry ID: " + entryId);
                         }

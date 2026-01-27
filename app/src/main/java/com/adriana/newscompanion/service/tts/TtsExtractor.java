@@ -327,6 +327,73 @@ public class TtsExtractor {
         }
     }
 
+    /**
+     * Ensures that the specified feed has a language detected and saved.
+     * This method is synchronous and thread-safe, detecting language only once per feed.
+     * 
+     * @param feedId The ID of the feed to check/detect language for
+     * @return The detected or existing language code for the feed
+     */
+    public synchronized String ensureFeedLanguageDetected(long feedId) {
+        try {
+            com.adriana.newscompanion.data.feed.Feed feed = feedRepository.getFeedById(feedId);
+            
+            if (feed == null) {
+                Log.e(TAG, "Feed not found for ID: " + feedId);
+                return "en"; // Fallback to English
+            }
+            
+            String feedLanguage = feed.getLanguage();
+            
+            // Check if language is already set and valid
+            if (feedLanguage != null && !feedLanguage.isEmpty() && !feedLanguage.equalsIgnoreCase("und")) {
+                Log.d(TAG, "Feed already has language set: " + feed.getTitle() + " (" + feedLanguage + ")");
+                return feedLanguage;
+            }
+            
+            // Language not set, need to detect it
+            Log.d(TAG, "Detecting language for feed: " + feed.getTitle());
+            
+            // Get a sample entry from this feed to detect language
+            Entry sampleEntry = entryRepository.getFirstEntryByFeedId(feedId);
+            
+            if (sampleEntry == null || sampleEntry.getContent() == null || sampleEntry.getContent().isEmpty()) {
+                Log.w(TAG, "No content available for language detection, defaulting to 'en'");
+                feed.setLanguage("en");
+                feedRepository.update(feed);
+                return "en";
+            }
+            
+            // Use the first 500 characters for language detection
+            String sampleText = sampleEntry.getContent();
+            if (sampleText.length() > 500) {
+                sampleText = sampleText.substring(0, 500);
+            }
+            
+            // Detect language synchronously (blocking call)
+            String detectedLanguage = textUtil.identifyLanguageRx(sampleText)
+                    .blockingGet();
+            
+            if (detectedLanguage != null && !detectedLanguage.equalsIgnoreCase("und")) {
+                // Save the detected language to the feed
+                feed.setLanguage(detectedLanguage);
+                feedRepository.update(feed);
+                Log.d(TAG, "Detected and saved language '" + detectedLanguage + "' for feed: " + feed.getTitle());
+                return detectedLanguage;
+            } else {
+                // Fallback to English if detection fails
+                feed.setLanguage("en");
+                feedRepository.update(feed);
+                Log.d(TAG, "Language detection failed for feed: " + feed.getTitle() + ", defaulting to 'en'");
+                return "en";
+            }
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error detecting language for feed ID " + feedId + ": " + e.getMessage(), e);
+            return "en"; // Fallback to English on error
+        }
+    }
+
     public void setCallback(TtsPlayerListener callback) { this.ttsCallback = callback; }
     public void setCallback(WebViewListener callback) { this.webViewCallback = callback; }
 

@@ -466,4 +466,8 @@ public class EntryRepository {
     public void markAsAiSummarized(long id, boolean isTranslated) {
         entryDao.markAsAiSummarized(id, isTranslated);
     }
+
+    public Entry getFirstEntryByFeedId(long feedId) {
+        return entryDao.getFirstEntryByFeedId(feedId);
+    }
 }

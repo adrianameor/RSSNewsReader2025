@@ -284,4 +284,7 @@ public interface EntryDao {
 
     @Query("UPDATE entry_table SET isAiSummarized = 1, isAiSummaryTranslated = :isTranslated WHERE id = :id")
     void markAsAiSummarized(long id, boolean isTranslated);
+
+    @Query("SELECT * FROM entry_table WHERE feedId = :feedId AND content IS NOT NULL AND content != '' ORDER BY publishedDate DESC LIMIT 1")
+    Entry getFirstEntryByFeedId(long feedId);
 }
