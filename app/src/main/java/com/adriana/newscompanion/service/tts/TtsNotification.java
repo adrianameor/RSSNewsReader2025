@@ -77,12 +77,12 @@ public class TtsNotification extends Notification {
         return notificationManager;
     }
 
-    public Notification getNotification(MediaMetadataCompat metaData, @NonNull PlaybackStateCompat state, MediaSessionCompat.Token token) {
+    public Notification getNotification(MediaMetadataCompat metaData, @NonNull PlaybackStateCompat state, MediaSessionCompat.Token token, long[] playlist) {
         MediaDescriptionCompat description = metaData.getDescription();
-        return buildNotification(state, token, description);
+        return buildNotification(state, token, description, playlist);
     }
 
-    private Notification buildNotification(@NonNull PlaybackStateCompat state, MediaSessionCompat.Token token, MediaDescriptionCompat description) {
+    private Notification buildNotification(@NonNull PlaybackStateCompat state, MediaSessionCompat.Token token, MediaDescriptionCompat description, long[] playlist) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             if (notificationManager.getNotificationChannel(TTS_CHANNEL_ID) == null) {
                 NotificationChannel ttsChannel = new NotificationChannel(
@@ -101,7 +101,7 @@ public class TtsNotification extends Notification {
         NotificationCompat.Builder builder = new NotificationCompat.Builder(ttsService, TTS_CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_rss)
                 .setColor(Color.WHITE)
-                .setContentIntent(createContentIntent())
+                .setContentIntent(createContentIntent(playlist))
                 .setDeleteIntent(TtsMediaButtonReceiver.buildMediaButtonPendingIntent(ttsService, PlaybackStateCompat.ACTION_STOP))
                 .setContentTitle(description.getTitle())
                 .setContentText(description.getSubtitle())
@@ -132,9 +132,18 @@ public class TtsNotification extends Notification {
         return builder.build();
     }
 
-    private PendingIntent createContentIntent() {
+    private PendingIntent createContentIntent(long[] playlist) {
         Intent openUI = new Intent(ttsService, WebViewActivity.class);
         openUI.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        
+        // Add playlist to Intent so WebViewActivity has full context
+        if (playlist != null && playlist.length > 0) {
+            openUI.putExtra("playlist_ids", playlist);
+            android.util.Log.d(TAG, "Notification Intent: Added playlist with " + playlist.length + " items");
+        } else {
+            android.util.Log.w(TAG, "Notification Intent: No playlist available");
+        }
+        
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             return PendingIntent.getActivity(ttsService,
                     REQUEST_CODE, openUI, PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE);

@@ -287,4 +287,7 @@ public interface EntryDao {
 
     @Query("SELECT * FROM entry_table WHERE feedId = :feedId AND content IS NOT NULL AND content != '' ORDER BY publishedDate DESC LIMIT 1")
     Entry getFirstEntryByFeedId(long feedId);
+
+    @Query("UPDATE entry_table SET content = NULL WHERE content IS NOT NULL")
+    void clearAllContent();
 }

@@ -187,12 +187,15 @@ public class TtsExtractor {
                         }
                         failedIds.add(currentIdInProgress);
                     } else {
+                        // CRITICAL FIX: Prepend title to content for TTS
+                        String contentWithTitle = currentTitle + delimiter + finalFullText;
+
                         entryRepository.updateHtml(doc.html(), currentIdInProgress);
                         if (entryRepository.getOriginalHtmlById(currentIdInProgress) == null) {
                             entryRepository.updateOriginalHtml(doc.html(), currentIdInProgress);
-                            entryRepository.updateContent(finalFullText, currentIdInProgress);
+                            entryRepository.updateContent(contentWithTitle, currentIdInProgress);
                         }
-                        Log.d(TAG, "✓ HTTP SUCCESS: ID " + currentIdInProgress + " finished.");
+                        Log.d(TAG, "✓ HTTP SUCCESS: ID " + currentIdInProgress + " finished with title prepended.");
                     }
                 } else {
                     failedIds.add(currentIdInProgress);
@@ -460,12 +463,15 @@ public class TtsExtractor {
                                     if (finalFullText.length() < 200 || finalFullText.toLowerCase().contains("please enable javascript")) {
                                         failedIds.add(currentIdInProgress);
                                     } else {
+                                        // CRITICAL FIX: Prepend title to content for TTS
+                                        String contentWithTitle = currentTitle + delimiter + finalFullText;
+
                                         entryRepository.updateHtml(doc.html(), currentIdInProgress);
                                         if (entryRepository.getOriginalHtmlById(currentIdInProgress) == null) {
                                             entryRepository.updateOriginalHtml(doc.html(), currentIdInProgress);
-                                            entryRepository.updateContent(finalFullText, currentIdInProgress);
+                                            entryRepository.updateContent(contentWithTitle, currentIdInProgress);
                                         }
-                                        Log.d(TAG, "✓ SUCCESS: ID " + currentIdInProgress + " finished.");
+                                        Log.d(TAG, "✓ SUCCESS: ID " + currentIdInProgress + " finished with title prepended.");
                                     }
                                 }
                             }

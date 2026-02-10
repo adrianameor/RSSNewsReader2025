@@ -39,6 +39,7 @@ import com.adriana.newscompanion.data.playlist.Playlist;
 import com.adriana.newscompanion.data.playlist.PlaylistRepository;
 import com.adriana.newscompanion.data.sharedpreferences.SharedPreferencesRepository;
 import com.adriana.newscompanion.model.EntryInfo;
+import com.adriana.newscompanion.model.PlaybackStateModel;
 import com.adriana.newscompanion.service.tts.TtsExtractor;
 import com.adriana.newscompanion.service.tts.TtsPlayer;
 import com.adriana.newscompanion.service.tts.TtsPlaylist;
@@ -147,6 +148,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     PlaylistRepository playlistRepository;
 
     private boolean isLoadingFromNewIntent = false;
+    private long[] currentPlaylistCache;
     
     @Override
     protected void onNewIntent(Intent intent) {
@@ -159,6 +161,8 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         isLoadingFromNewIntent = true;
 
         setIntent(intent);
+
+        long[] newPlaylist = getPlaylistFromIntent(intent);
 
         if (!isFromSkipAction) {
             if (ttsPlayer != null && ttsPlayer.isSpeaking()) {
@@ -178,6 +182,12 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
         isInitialLoad = true;
         clearHistory = true;
+
+        if (!isReadingMode && newPlaylist != null) {
+            List<Long> list = new ArrayList<>();
+            for (long id : newPlaylist) list.add(id);
+            ttsPlaylist.setPlaylist(list, intent.getLongExtra("entry_id", -1));
+        }
 
         loadEntryContent();
 
@@ -212,10 +222,36 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             new MediaControllerCompat.Callback() {
                 @Override
                 public void onPlaybackStateChanged(@NonNull PlaybackStateCompat state) {
+                    Log.e("UI_TRACE", "🎵 mediaControllerCallback.onPlaybackStateChanged fired: state=" + 
+                        (state == null ? "null" : state.getState()));
                     super.onPlaybackStateChanged(state);
                     isPlaying = state.getState() == PlaybackStateCompat.STATE_PLAYING;
                     updatePlayPauseButtonIcon(isPlaying);
                     Log.d(TAG, "Playback state changed: " + state.getState());
+                }
+                
+                @Override
+                public void onSessionEvent(String event, Bundle extras) {
+                    Log.e("UI_TRACE", "🔥 mediaControllerCallback.onSessionEvent RECEIVED");
+                    Log.e("UI_TRACE", "   event = " + event);
+                    Log.e("UI_TRACE", "   extras = " + (extras == null ? "null" : extras.keySet()));
+                    super.onSessionEvent(event, extras);
+                    
+                    if ("request_next_article".equals(event)) {
+                        Log.e("UI_TRACE", "➡️ request_next_article in mediaControllerCallback");
+                        long nextEntryId = extras.getLong("next_entry_id", -1);
+                        int nextIndex = extras.getInt("next_index", -1);
+                        if (nextEntryId > 0) {
+                            loadArticleForPlayback(nextEntryId, nextIndex);
+                        }
+                    } else if ("request_previous_article".equals(event)) {
+                        Log.e("UI_TRACE", "⬅️ request_previous_article in mediaControllerCallback");
+                        long prevEntryId = extras.getLong("prev_entry_id", -1);
+                        int prevIndex = extras.getInt("prev_index", -1);
+                        if (prevEntryId > 0) {
+                            loadArticleForPlayback(prevEntryId, prevIndex);
+                        }
+                    }
                 }
             };
 
@@ -339,9 +375,17 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         compositeDisposable = new CompositeDisposable();
         textUtil = new TextUtil(sharedPreferencesRepository, translationRepository);
 
+        long[] currentPlaylist = getPlaylistFromIntent(getIntent());
+
         initializeToolbarListeners();
         initializeWebViewSettings();
-        initializePlaybackModes();
+
+        if (isReadingMode) {
+            switchReadMode(currentPlaylist);
+        } else {
+            switchPlayMode(currentPlaylist);
+        }
+        
         loadEntryContent();
     }
 
@@ -439,11 +483,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     }
 
     private void initializePlaybackModes() {
-        if (isReadingMode) {
-            switchReadMode();
-        } else {
-            switchPlayMode();
-        }
+        Log.w(TAG, "initializePlaybackModes() called - this should not happen!");
     }
 
     private void loadEntryContent() {
@@ -472,11 +512,10 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             offlineButton.setVisible(false);
             toggleTranslationButton.setVisible(false);
             summarizeButton.setVisible(false);
-            translationButton.setVisible(false); // Added: Hide translate button if no content
+            translationButton.setVisible(false);
             return;
         }
 
-        // --- AUTO-SHOW LOGIC ---
         boolean autoTranslateOn = sharedPreferencesRepository.getAutoTranslate();
         boolean translationExists = entryInfo.getTranslated() != null && !entryInfo.getTranslated().trim().isEmpty();
         boolean summaryExists = entryInfo.getSummary() != null && !entryInfo.getSummary().trim().isEmpty();
@@ -486,7 +525,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 isSummaryView = true;
             } else {
                 isSummaryView = false;
-                // If summary off, default to Translated view if setting is ON and ready
                 isTranslatedView = autoTranslateOn && translationExists;
             }
             isInitialLoad = false;
@@ -500,10 +538,8 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         String langForTts;
 
         if (isSummaryView) {
-            // STATE: SUMMARY VIEW
             String summaryText = entryInfo.getSummary();
-            
-            // FIX: Use translated title if translation exists and autoTranslate is on
+
             String baseTitle = (autoTranslateOn && entryInfo.getTranslatedTitle() != null && !entryInfo.getTranslatedTitle().isEmpty())
                     ? entryInfo.getTranslatedTitle()
                     : entryInfo.getEntryTitle();
@@ -528,14 +564,13 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             summarizeButton.setTitle("Show Full Article");
             browserButton.setVisible(false);
         } else {
-            // STATE: FULL ARTICLE VIEW
             if (isTranslatedView && translationExists) {
-                htmlToLoad = currentHtml; // Cleaned + Translated
+                htmlToLoad = currentHtml;
                 titleToDisplay = entryInfo.getTranslatedTitle();
                 contentForTts = titleToDisplay + " --####-- " + entryInfo.getTranslated();
                 langForTts = sharedPreferencesRepository.getDefaultTranslationLanguage();
             } else {
-                htmlToLoad = originalHtml; // Cleaned Original (Fixed by worker)
+                htmlToLoad = originalHtml;
                 titleToDisplay = entryInfo.getEntryTitle();
                 contentForTts = titleToDisplay + " --####-- " + entryInfo.getContent();
                 langForTts = entryInfo.getFeedLanguage();
@@ -550,13 +585,10 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             getSupportActionBar().setTitle(titleToDisplay);
         }
 
-        // --- UI VISIBILITY FIXES ---
         summarizeButton.setVisible(sharedPreferencesRepository.isSummarizationEnabled());
 
-        // Hide manual translate button if auto-translate is on OR if we are in summary view
         translationButton.setVisible(!autoTranslateOn && !isSummaryView);
 
-        // Update the toggle button (Show Original/Translation)
         updateToggleTranslationVisibility();
 
         if (bookmark == null || bookmark.equals("N")) {
@@ -570,12 +602,10 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             ttsPlayer.extract(currentId, feedId, contentForTts, langForTts);
         }
 
-        // Store current TTS content and language in SharedPreferences for TtsService sync
         sharedPreferencesRepository.setCurrentTtsContent(contentForTts);
         sharedPreferencesRepository.setCurrentTtsLang(langForTts);
 
         sharedPreferencesRepository.setCurrentReadingEntryId(currentId);
-        initializePlaylistSystem();
         if (!isSummaryView) {
             syncLoadingWithTts();
         }
@@ -617,8 +647,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 }
 
                 EntryInfo originalEntryInfo = webViewViewModel.getEntryInfoById(currentId);
-                
-                // FIX: Apply translated title logic here too
+
                 boolean autoTranslateOn = sharedPreferencesRepository.getAutoTranslate();
                 String baseTitle = (autoTranslateOn && originalEntryInfo != null && originalEntryInfo.getTranslatedTitle() != null && !originalEntryInfo.getTranslatedTitle().isEmpty())
                         ? originalEntryInfo.getTranslatedTitle()
@@ -647,7 +676,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         if (isSummaryView) {
             isSummaryView = false;
             loadEntryContent();
-            // Notify TTS service to restart with new content (reset progress)
             if (!isReadingMode && mMediaBrowserHelper != null && mMediaBrowserHelper.getTransportControls() != null) {
                 mMediaBrowserHelper.getTransportControls().sendCustomAction("contentChangedSummary", null);
             }
@@ -656,7 +684,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             if (info != null && info.getSummary() != null && !info.getSummary().trim().isEmpty()) {
                 isSummaryView = true;
                 loadEntryContent();
-                // Notify TTS service to restart with new content (reset progress)
                 if (!isReadingMode && mMediaBrowserHelper != null && mMediaBrowserHelper.getTransportControls() != null) {
                     mMediaBrowserHelper.getTransportControls().sendCustomAction("contentChangedSummary", null);
                 }
@@ -676,7 +703,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
         String htmlToLoad = isTranslatedView ? translatedHtml : originalHtml;
 
-        // THIS IS THE FIX: Get the current title and pass it to the two-argument version of the helper.
         String titleToDisplay = (getSupportActionBar() != null && getSupportActionBar().getTitle() != null)
                 ? getSupportActionBar().getTitle().toString()
                 : "";
@@ -685,7 +711,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         Log.d(TAG, "LiveEntry - HTML to Load:\n" + htmlToLoad);
 
         if (htmlToLoad != null && !htmlToLoad.trim().isEmpty()) {
-            // Call the TWO-argument version to prevent the title from being overwritten.
             loadHtmlIntoWebView(htmlToLoad, titleToDisplay);
         } else {
             Log.w(TAG, "Skipped loading empty html in updateToggleStateAndWebView()");
@@ -818,7 +843,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                     sharedPreferencesRepository.setCurrentTtsSentencePosition(currentSentence);
                 }
                 loadEntryContent();
-                // Notify TTS service to restart with new content (maintain sentence position)
                 if (!isReadingMode && mMediaBrowserHelper != null && mMediaBrowserHelper.getTransportControls() != null) {
                     mMediaBrowserHelper.getTransportControls().sendCustomAction("contentChangedTranslation", null);
                 }
@@ -912,7 +936,14 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 functionButtonsReadingMode.setVisibility(View.INVISIBLE);
                 switchPlayModeButton.setVisible(false);
                 ttsExtractor.setCallback((WebViewListener) null);
-                switchPlayMode();
+                
+                // Get current playlist from cache or Intent
+                long[] playlist = currentPlaylistCache;
+                if (playlist == null) {
+                    playlist = getIntent().getLongArrayExtra("playlist_ids");
+                }
+                
+                switchPlayMode(playlist);
                 mMediaBrowserHelper.onStart();
                 functionButtons.setVisibility(View.VISIBLE);
                 functionButtons.setAlpha(1.0f);
@@ -926,7 +957,13 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 mMediaBrowserHelper.getTransportControls().stop();
                 mMediaBrowserHelper.onStop();
                 webView.clearMatches();
-                switchReadMode();
+
+                long[] playlist = currentPlaylistCache;
+                if (playlist == null) {
+                    playlist = getIntent().getLongArrayExtra("playlist_ids");
+                }
+                
+                switchReadMode(playlist);
                 return true;
 
             } else if (itemId == R.id.highlightText) {
@@ -1037,22 +1074,149 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         });
     }
 
-    private void switchReadMode() {
+    private long[] getPlaylistFromIntent(Intent intent) {
+        if (intent != null && intent.hasExtra("playlist_ids")) {
+            long[] playlistArray = intent.getLongArrayExtra("playlist_ids");
+            if (playlistArray != null && playlistArray.length > 0) {
+                currentPlaylistCache = playlistArray;
+
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < playlistArray.length; i++) {
+                    sb.append(playlistArray[i]);
+                    if (i < playlistArray.length - 1) {
+                        sb.append(",");
+                    }
+                }
+                String newPlaylistString = sb.toString();
+
+                String currentPlaylist = playlistRepository.getLatestPlaylist();
+                if (currentPlaylist == null || !currentPlaylist.equals(newPlaylistString)) {
+                    Playlist playlist = new Playlist(new Date(), newPlaylistString);
+                    playlistRepository.insert(playlist);
+                    Log.d(TAG, "✅ Playlist saved/updated in repository");
+                } else {
+                    Log.d(TAG, "ℹ️ Playlist unchanged, keeping existing");
+                }
+                
+                Log.d(TAG, "✅ Playlist extracted from intent. Size: " + playlistArray.length);
+                return playlistArray;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Builds complete playback state from current UI state.
+     * This is the SINGLE SOURCE OF TRUTH for what should be played.
+     * Service will use this data exactly as provided.
+     */
+    private PlaybackStateModel buildPlaybackState() {
+        PlaybackStateModel state = new PlaybackStateModel();
+        
+        // Get playlist
+        long[] playlistArray = getPlaylistFromIntent(getIntent());
+        if (playlistArray == null || playlistArray.length == 0) {
+            playlistArray = createSimpleFallbackPlaylist(currentId);
+        }
+        
+        state.entryIds = new ArrayList<>();
+        for (long id : playlistArray) {
+            state.entryIds.add(id);
+        }
+        
+        // Find current index
+        state.currentIndex = state.entryIds.indexOf(currentId);
+        if (state.currentIndex == -1) {
+            state.currentIndex = 0;
+        }
+        
+        state.currentEntryId = currentId;
+        
+        // Determine mode and content
+        EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
+        if (entryInfo == null) {
+            Log.e(TAG, "buildPlaybackState: EntryInfo is null for ID " + currentId);
+            return null;
+        }
+        
+        state.entryTitle = entryInfo.getEntryTitle();
+        state.feedTitle = entryInfo.getFeedTitle();
+        
+        // Build content based on current view mode
+        if (isSummaryView) {
+            state.mode = PlaybackStateModel.PlaybackMode.SUMMARY;
+            String summaryText = entryInfo.getSummary();
+            if (summaryText == null || summaryText.trim().isEmpty()) {
+                Log.e(TAG, "buildPlaybackState: Summary is empty");
+                return null;
+            }
+            
+            String baseTitle = (isTranslatedView && entryInfo.getTranslatedTitle() != null && !entryInfo.getTranslatedTitle().isEmpty()) 
+                ? entryInfo.getTranslatedTitle() 
+                : entryInfo.getEntryTitle();
+            String titleWithPrefix = getString(R.string.summary_prefix) + ": " + baseTitle;
+            String processedSummary = summaryText.replace("\n\n", " --####-- ");
+            state.textToRead = titleWithPrefix + " --####-- " + processedSummary;
+            
+            state.language = entryInfo.isAiSummaryTranslated() 
+                ? sharedPreferencesRepository.getDefaultTranslationLanguage()
+                : entryInfo.getFeedLanguage();
+                
+        } else if (isTranslatedView && entryInfo.getTranslated() != null && !entryInfo.getTranslated().trim().isEmpty()) {
+            state.mode = PlaybackStateModel.PlaybackMode.TRANSLATED;
+            state.textToRead = entryInfo.getTranslatedTitle() + " --####-- " + entryInfo.getTranslated();
+            state.language = sharedPreferencesRepository.getDefaultTranslationLanguage();
+            
+        } else {
+            state.mode = PlaybackStateModel.PlaybackMode.FULL;
+            String content = entryInfo.getContent();
+            if (content == null || content.trim().isEmpty()) {
+                Log.e(TAG, "buildPlaybackState: Content is empty");
+                return null;
+            }
+            state.textToRead = entryInfo.getEntryTitle() + " --####-- " + content;
+            state.language = entryInfo.getFeedLanguage();
+        }
+        
+        // Ensure language is set
+        if (state.language == null || state.language.isEmpty()) {
+            state.language = "en";
+        }
+        
+        Log.d(TAG, "✅ Built PlaybackStateModel:");
+        Log.d(TAG, "   Mode: " + state.mode);
+        Log.d(TAG, "   Playlist size: " + state.entryIds.size());
+        Log.d(TAG, "   Current index: " + state.currentIndex);
+        Log.d(TAG, "   Language: " + state.language);
+        Log.d(TAG, "   Text length: " + state.textToRead.length());
+        
+        return state;
+    }
+
+    private void switchReadMode(long[] playlistIdsFromIntent) {
         functionButtonsReadingMode.setVisibility(View.VISIBLE);
 
-        String playlistIdString = playlistRepository.getLatestPlaylist();
         List<Long> playlistIds = new ArrayList<>();
-        if (playlistIdString != null && !playlistIdString.isEmpty()) {
-            String[] ids = playlistIdString.split(",");
-            for (String idStr : ids) {
-                if (!idStr.isEmpty()) {
-                    try {
-                        playlistIds.add(Long.parseLong(idStr));
-                    } catch (NumberFormatException e) {
-                        Log.e(TAG, "Failed to parse ID from playlist string: " + idStr, e);
+        if (playlistIdsFromIntent != null && playlistIdsFromIntent.length > 0) {
+            for (long id : playlistIdsFromIntent) {
+                playlistIds.add(id);
+            }
+            Log.d(TAG, "✅ switchReadMode using playlist from intent. Size: " + playlistIds.size());
+        } else {
+            String playlistIdString = playlistRepository.getLatestPlaylist();
+            if (playlistIdString != null && !playlistIdString.isEmpty()) {
+                String[] ids = playlistIdString.split(",");
+                for (String idStr : ids) {
+                    if (!idStr.isEmpty()) {
+                        try {
+                            playlistIds.add(Long.parseLong(idStr));
+                        } catch (NumberFormatException e) {
+                            Log.e(TAG, "Failed to parse ID from playlist string: " + idStr, e);
+                        }
                     }
                 }
             }
+            Log.w(TAG, "⚠️ switchReadMode using fallback from repository. Size: " + playlistIds.size());
         }
         ttsPlaylist.setPlaylist(playlistIds, currentId);
 
@@ -1087,8 +1251,127 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         switchPlayModeButton.setVisible(true);
     }
 
-    private void switchPlayMode() {
+    /**
+     * STEP 4: Load article for playback after skip button press.
+     * Called when Service sends "request_next_article" or "request_previous_article" event.
+     * UI loads the article and sends new PlaybackStateModel to Service.
+     */
+    private void loadArticleForPlayback(long entryId, int index) {
+        Log.e("UI_TRACE", "🔄 loadArticleForPlayback CALLED");
+        Log.e("UI_TRACE", "   entryId = " + entryId);
+        Log.e("UI_TRACE", "   index = " + index);
+        
+        runOnUiThread(() -> {
+            Log.e("UI_TRACE", "🧵 Running on UI thread");
+            Log.d(TAG, "🔄 Loading article for playback: ID=" + entryId + ", index=" + index);
+            
+            // Update current ID
+            currentId = entryId;
+            
+            // Load entry content
+            EntryInfo entryInfo = webViewViewModel.getEntryInfoById(entryId);
+            Log.e("UI_TRACE", "   entryInfo = " + (entryInfo == null ? "null" : "FOUND"));
+            
+            if (entryInfo == null) {
+                Log.e("UI_TRACE", "❌ EntryInfo is null — aborting UI update");
+                Log.e(TAG, "❌ Entry not found: " + entryId);
+                makeSnackbar("Error: Article not found");
+                return;
+            }
+            
+            // Update UI state (preserve current mode or reset to full)
+            isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(entryId);
+            // Keep summary view if enabled, otherwise show full article
+            boolean summaryExists = entryInfo.getSummary() != null && !entryInfo.getSummary().trim().isEmpty();
+            if (!sharedPreferencesRepository.isSummarizationEnabled() || !summaryExists) {
+                isSummaryView = false;
+            }
+            
+            // Load content into WebView
+            loadEntryContent();
+            Log.e("UI_TRACE", "✅ loadEntryContent() called");
+            
+            // Build new playback state
+            PlaybackStateModel playbackModel = buildPlaybackState();
+            Log.e("UI_TRACE", "   playbackModel = " + (playbackModel == null ? "null" : "BUILT"));
+            if (playbackModel == null) {
+                Log.e(TAG, "❌ Failed to build playback state for skipped article");
+                makeSnackbar("Error: Could not prepare playback");
+                return;
+            }
+            
+            // Override index to match skip position
+            playbackModel.currentIndex = index;
+            
+            // Send to service
+            Bundle extras = new Bundle();
+            extras.putParcelable("playback_state", playbackModel);
+            
+            MediaControllerCompat controller = mMediaBrowserHelper.getMediaController();
+            if (controller != null) {
+                controller.getTransportControls().playFromMediaId(String.valueOf(entryId), extras);
+                Log.d(TAG, "✅ Sent new playback state to service for entry: " + entryId);
+            } else {
+                Log.e(TAG, "❌ MediaController is null, cannot send playback state");
+            }
+        });
+    }
+
+    private long[] createSimpleFallbackPlaylist(long currentEntryId) {
+        List<Long> fallbackList = new ArrayList<>();
+        fallbackList.add(currentEntryId);
+
+        for (int i = 1; i <= 2; i++) {
+            long nextId = currentEntryId + i;
+            if (entryRepository.checkIdExist(nextId)) {
+                fallbackList.add(nextId);
+            }
+        }
+        
+        long[] result = new long[fallbackList.size()];
+        for (int i = 0; i < fallbackList.size(); i++) {
+            result[i] = fallbackList.get(i);
+        }
+        
+        Log.d("TTS_QUEUE_FIX", "   📝 Created fallback playlist with " + result.length + " items: " + fallbackList.toString());
+        return result;
+    }
+
+    private void switchPlayMode(long[] playlistIdsFromIntent) {
+        Log.d("TTS_QUEUE_FIX", "🎮 switchPlayMode() called");
+        
         webView.setWebViewClient(new WebClient());
+        
+        List<Long> playlistIds = new ArrayList<>();
+        if (playlistIdsFromIntent != null && playlistIdsFromIntent.length > 0) {
+            for (long id : playlistIdsFromIntent) {
+                playlistIds.add(id);
+            }
+            Log.d("TTS_QUEUE_FIX", "   ✅ switchPlayMode using playlist from intent. Size: " + playlistIds.size());
+        } else {
+            String playlistIdString = playlistRepository.getLatestPlaylist();
+            Log.d("TTS_QUEUE_FIX", "   📋 Fallback: Playlist from repository: " + (playlistIdString == null ? "NULL" : playlistIdString));
+            
+            if (playlistIdString != null && !playlistIdString.isEmpty()) {
+                String[] ids = playlistIdString.split(",");
+                for (String idStr : ids) {
+                    if (!idStr.isEmpty()) {
+                        try {
+                            playlistIds.add(Long.parseLong(idStr));
+                        } catch (NumberFormatException e) {
+                            Log.e(TAG, "Failed to parse ID from playlist string: " + idStr, e);
+                        }
+                    }
+                }
+            }
+            Log.w("TTS_QUEUE_FIX", "   ⚠️ switchPlayMode using fallback from repository. Size: " + playlistIds.size());
+        }
+
+        if (!playlistIds.isEmpty()) {
+            ttsPlaylist.setPlaylist(playlistIds, currentId);
+            Log.d("TTS_QUEUE_FIX", "   📝 TtsPlaylist updated with " + playlistIds.size() + " items");
+        }
+        
         setupMediaPlaybackButtons();
 
         mMediaBrowserHelper = new MediaBrowserConnection(this);
@@ -1098,20 +1381,85 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     }
 
     private void setupMediaPlaybackButtons() {
+        Log.d("TTS_QUEUE_FIX", "🔧🔧🔧 DEBUG: setupMediaPlaybackButtons() CALLED");
+        Log.d("TTS_QUEUE_FIX", "   Current Mode: " + (isReadingMode ? "READING" : "PLAY"));
+        Log.d("TTS_QUEUE_FIX", "   Current ID at setup time: " + currentId);
+        
         playPauseButton.setOnClickListener(view -> {
+            Log.d("TTS_QUEUE_FIX", "▶️▶️▶️ DEBUG: Play/Pause button CLICKED!");
+
+            long playEntryId = currentId;
+            if (playEntryId == 0) {
+                playEntryId = getIntent().getLongExtra("entry_id", -1);
+                Log.w(TAG, "   ⚠️ currentId was 0, retrieved from intent: " + playEntryId);
+            }
+            
+            if (playEntryId <= 0) {
+                Log.e(TAG, "   ❌ Cannot play: invalid entry ID");
+                makeSnackbar("Error: Invalid article ID");
+                return;
+            }
+            
+            MediaControllerCompat controller = mMediaBrowserHelper.getMediaController();
+            if (controller == null) {
+                Log.e(TAG, "❌ MediaController is null, cannot process play/pause click");
+                return;
+            }
+
+            PlaybackStateCompat playbackState = controller.getPlaybackState();
+            boolean isPlaying = playbackState != null && playbackState.getState() == PlaybackStateCompat.STATE_PLAYING;
+            Log.d(TAG, "   Current playback state: " + (isPlaying ? "PLAYING" : "PAUSED/STOPPED"));
+
             if (isPlaying) {
-                mMediaBrowserHelper.getTransportControls().pause();
-                Log.d(TAG, "switchPlayMode: pausing " + ttsPlaylist.getPlayingId());
+                Log.d(TAG, "   Action: PAUSE");
+                controller.getTransportControls().pause();
             } else {
-                mMediaBrowserHelper.getTransportControls().play();
-                Log.d(TAG, "switchPlayMode: playing " + ttsPlaylist.getPlayingId());
+                Log.d(TAG, "   Action: PLAY - Building complete playback state");
+                
+                // Build complete playback state from UI
+                PlaybackStateModel playbackModel = buildPlaybackState();
+                if (playbackModel == null) {
+                    Log.e(TAG, "Failed to build playback state");
+                    makeSnackbar("Error: Could not prepare playback");
+                    return;
+                }
+                
+                Bundle extras = new Bundle();
+                extras.putParcelable("playback_state", playbackModel);
+                
+                Log.d(TAG, "   Sending PlaybackStateModel:");
+                Log.d(TAG, "     - Mode: " + playbackModel.mode);
+                Log.d(TAG, "     - Playlist size: " + playbackModel.entryIds.size());
+                Log.d(TAG, "     - Current index: " + playbackModel.currentIndex);
+                Log.d(TAG, "     - Language: " + playbackModel.language);
+                Log.d(TAG, "     - Text length: " + playbackModel.textToRead.length());
+                
+                controller.getTransportControls().playFromMediaId(String.valueOf(currentId), extras);
+                Log.d(TAG, "   🚀 Play command sent with PlaybackStateModel");
             }
         });
 
-        skipNextButton.setOnClickListener(view -> mMediaBrowserHelper.getTransportControls().skipToNext());
-        skipPreviousButton.setOnClickListener(view -> mMediaBrowserHelper.getTransportControls().skipToPrevious());
-        fastForwardButton.setOnClickListener(view -> mMediaBrowserHelper.getTransportControls().fastForward());
-        rewindButton.setOnClickListener(view -> mMediaBrowserHelper.getTransportControls().rewind());
+        skipNextButton.setOnClickListener(view -> {
+            Log.d(TAG, "⏭️ Skip Next button clicked");
+            mMediaBrowserHelper.getTransportControls().skipToNext();
+        });
+        
+        skipPreviousButton.setOnClickListener(view -> {
+            Log.d(TAG, "⏮️ Skip Previous button clicked");
+            mMediaBrowserHelper.getTransportControls().skipToPrevious();
+        });
+        
+        fastForwardButton.setOnClickListener(view -> {
+            Log.d(TAG, "⏩ Fast Forward button clicked");
+            mMediaBrowserHelper.getTransportControls().fastForward();
+        });
+        
+        rewindButton.setOnClickListener(view -> {
+            Log.d(TAG, "⏪ Rewind button clicked");
+            mMediaBrowserHelper.getTransportControls().rewind();
+        });
+        
+        Log.d(TAG, "🔧 setupMediaPlaybackButtons() completed - all listeners attached");
     }
 
     private void setupReadingWebView() {
@@ -1192,7 +1540,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             if (!finalText.isEmpty()) {
                 ContextCompat.getMainExecutor(getApplicationContext()).execute(() -> {
                     if (isSummaryView) {
-                        // For summary view, search paragraph-by-paragraph
                         String[] paragraphs = finalText.split("--####--");
                         for (String paragraph : paragraphs) {
                             String trimmedPara = paragraph.trim();
@@ -1359,10 +1706,9 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
         if (!isReadingMode) {
             mMediaBrowserHelper.onStart();
-            MediaControllerCompat mediaController = mMediaBrowserHelper.getMediaController();
-            if (mediaController != null) {
-                mediaController.registerCallback(mediaControllerCallback);
-            }
+            // ❌ REMOVED: Callback registration moved to MediaBrowserHelper.onConnected()
+            // Registering here is too early - MediaController is null until MediaBrowser connects
+            Log.e("UI_TRACE", "🎯 onResume: MediaBrowser.onStart() called, waiting for connection");
         }
 
     }
@@ -1496,25 +1842,29 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             super.onChildrenLoaded(parentId, children);
 
             final MediaControllerCompat mediaController = getMediaController();
-            if (mediaController != null) {
-
-                if (isPreparationRequested) {
-                    return;
-                }
-                isPreparationRequested = true;
-
-                String entryIdString = String.valueOf(getIntent().getLongExtra("entry_id", -1));
-                if (!"-1".equals(entryIdString)) {
-                    mediaController.getTransportControls().prepareFromMediaId(entryIdString, null);
-                } else {
-                    Log.e("LIFECYCLE_DEBUG", "Client connected but entryId is invalid.");
-                }
-
-                ttsPlayer.setWebViewCallback(WebViewActivity.this);
-                ttsPlayer.setWebViewConnected(true);
-            } else {
+            if (mediaController == null) {
                 Log.e("LIFECYCLE_DEBUG", "onChildrenLoaded: MediaController is NULL!");
+                return;
             }
+
+            if (isPreparationRequested) {
+                return;
+            }
+            isPreparationRequested = true;
+
+            String entryIdString = String.valueOf(getIntent().getLongExtra("entry_id", -1));
+            if (!"-1".equals(entryIdString)) {
+                // ONLY prepare metadata - DO NOT auto-play
+                mediaController.getTransportControls().prepareFromMediaId(entryIdString, null);
+
+                // Store playlist for later use when user clicks play button
+                Log.d(TAG, "Session prepared for entry: " + entryIdString + ". Waiting for user to click play.");
+            } else {
+                Log.e("LIFECYCLE_DEBUG", "Client connected but entryId is invalid.");
+            }
+
+            ttsPlayer.setWebViewCallback(WebViewActivity.this);
+            ttsPlayer.setWebViewConnected(true);
         }
     }
 
@@ -1523,15 +1873,24 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         public void onPlaybackStateChanged(PlaybackStateCompat state) {
             super.onPlaybackStateChanged(state);
             if (state == null) return;
-            
+
             isPlaying = state.getState() == PlaybackStateCompat.STATE_PLAYING;
             updatePlayPauseButtonIcon(isPlaying);
-            
-            // Handle STOPPED state to reset UI
+
+            // Enable buttons when in a playable state
+            if (state.getState() == PlaybackStateCompat.STATE_PLAYING ||
+                    state.getState() == PlaybackStateCompat.STATE_PAUSED) {
+                playPauseButton.setEnabled(true);
+                functionButtons.setAlpha(1.0f);
+                Log.d(TAG, "Playback state: " + state.getState() + ", buttons fully enabled");
+            }
+
+            // Reset to play icon when stopped
             if (state.getState() == PlaybackStateCompat.STATE_STOPPED) {
                 playPauseButton.setIconResource(R.drawable.ic_play);
                 playPauseButton.setEnabled(true);
-                Log.d(TAG, "Playback stopped, UI reset to play button");
+                functionButtons.setAlpha(1.0f);
+                Log.d(TAG, "Playback stopped, UI reset");
             }
         }
         
@@ -1541,10 +1900,43 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             if (extras != null) {
                 String errorMessage = extras.getString("ERROR_MESSAGE");
                 if (errorMessage != null) {
-                    // Display error message via Snackbar
-                    // DO NOT write back to session to avoid infinite loops
                     makeSnackbar(errorMessage);
                     Log.d(TAG, "Error message received from service: " + errorMessage);
+                }
+            }
+        }
+
+        @Override
+        public void onSessionEvent(String event, Bundle extras) {
+            Log.e("UI_TRACE", "📩 onSessionEvent RECEIVED");
+            Log.e("UI_TRACE", "   event = " + event);
+            Log.e("UI_TRACE", "   extras = " + (extras == null ? "null" : extras.keySet()));
+            
+            super.onSessionEvent(event, extras);
+            
+            if ("request_next_article".equals(event)) {
+                Log.e("UI_TRACE", "➡️ request_next_article detected");
+                long nextEntryId = extras.getLong("next_entry_id", -1);
+                int nextIndex = extras.getInt("next_index", -1);
+                Log.e("UI_TRACE", "   nextEntryId = " + nextEntryId);
+                Log.e("UI_TRACE", "   nextIndex = " + nextIndex);
+                
+                Log.d(TAG, "📨 Received skip next request: ID=" + nextEntryId + ", index=" + nextIndex);
+                
+                if (nextEntryId > 0) {
+                    loadArticleForPlayback(nextEntryId, nextIndex);
+                }
+            } else if ("request_previous_article".equals(event)) {
+                Log.e("UI_TRACE", "⬅️ request_previous_article detected");
+                long prevEntryId = extras.getLong("prev_entry_id", -1);
+                int prevIndex = extras.getInt("prev_index", -1);
+                Log.e("UI_TRACE", "   prevEntryId = " + prevEntryId);
+                Log.e("UI_TRACE", "   prevIndex = " + prevIndex);
+                
+                Log.d(TAG, "📨 Received skip previous request: ID=" + prevEntryId + ", index=" + prevIndex);
+                
+                if (prevEntryId > 0) {
+                    loadArticleForPlayback(prevEntryId, prevIndex);
                 }
             }
         }
@@ -1559,13 +1951,11 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             if (metadataEntryId != intentEntryId) return;
             if (isLoadingFromNewIntent) return;
 
-            // --- FIX START: Handle Summary View Visibility Immediately ---
             if (isSummaryView) {
                 runOnUiThread(() -> loading.setVisibility(View.GONE)); // Hide it for summary
                 updateToggleTranslationVisibility();
                 return;
             }
-            // --- FIX END ---
 
             String titleFromIntent = getIntent().getStringExtra("entry_title");
             if (titleFromIntent != null && !titleFromIntent.isEmpty() && getSupportActionBar() != null) {
@@ -1578,7 +1968,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 loading.setProgress(10);
             });
             functionButtons.setVisibility(View.VISIBLE);
-            functionButtons.setAlpha(0.5f);
             reloadButton.setVisible(false);
             bookmarkButton.setVisible(false);
             highlightTextButton.setVisible(false);
@@ -1647,51 +2036,4 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         playPauseButton.setIcon(ContextCompat.getDrawable(this, iconRes));
     }
 
-    private void initializePlaylistSystem() {
-        long currentId = getIntent().getLongExtra("entry_id", -1);
-        if (currentId != -1) {
-            EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
-            if (entryInfo != null) {
-                createOrUpdatePlaylist(currentId, entryInfo.getFeedId());
-            }
-        }
-    }
-
-    private void createOrUpdatePlaylist(long currentEntryId, long feedId) {
-        Date latestPlaylistDate = playlistRepository.getLatestPlaylistCreatedDate();
-        boolean needsNewPlaylist = latestPlaylistDate == null ||
-                System.currentTimeMillis() - latestPlaylistDate.getTime() > 3600000; // 1 hour
-
-        if (needsNewPlaylist) {
-            List<Long> playlistIds = new ArrayList<>();
-
-            List<Long> feedArticles = entryRepository.getArticleIdsByFeedId(feedId, 15);
-            playlistIds.addAll(feedArticles);
-
-            List<Long> recentRead = entryRepository.getRecentlyReadIds(15);
-            playlistIds.addAll(recentRead);
-
-            List<Long> bookmarked = entryRepository.getBookmarkedIds(10);
-            playlistIds.addAll(bookmarked);
-
-            List<Long> random = entryRepository.getRandomArticleIds(10);
-            playlistIds.addAll(random);
-
-            if (!playlistIds.contains(currentEntryId)) {
-                playlistIds.add(0, currentEntryId);
-            }
-
-            Set<Long> uniqueIds = new LinkedHashSet<>(playlistIds);
-            List<Long> finalList = new ArrayList<>(uniqueIds);
-            if (finalList.size() > 50) {
-                finalList = finalList.subList(0, 50);
-            }
-
-            String playlistString = TextUtils.join(",", finalList);
-            Playlist playlist = new Playlist(new Date(), playlistString);
-            playlist.setPlaylist(playlistString);
-            playlist.setCreatedDate(new Date());
-            playlistRepository.insert(playlist);
-        }
-    }
 }

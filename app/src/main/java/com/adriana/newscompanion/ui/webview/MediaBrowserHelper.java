@@ -186,6 +186,20 @@ public class MediaBrowserHelper {
         }
 
         @Override
+        public void onSessionEvent(final String event, final android.os.Bundle extras) {
+            Log.e("UI_TRACE", "🔥 MediaBrowserHelper.MediaControllerCallback.onSessionEvent RECEIVED");
+            Log.e("UI_TRACE", "   event = " + event);
+            Log.e("UI_TRACE", "   extras = " + (extras == null ? "null" : extras.keySet()));
+            
+            performOnAllCallbacks(new CallbackCommand() {
+                @Override
+                public void perform(@NonNull Callback callback) {
+                    callback.onSessionEvent(event, extras);
+                }
+            });
+        }
+
+        @Override
         public void onSessionDestroyed() {
             resetState();
             onPlaybackStateChanged(null);

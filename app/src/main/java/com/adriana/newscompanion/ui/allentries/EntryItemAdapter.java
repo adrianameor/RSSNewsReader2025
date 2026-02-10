@@ -26,6 +26,9 @@ import java.util.concurrent.TimeUnit;
 import com.adriana.newscompanion.R;
 import com.adriana.newscompanion.model.EntryInfo;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.EntryItemHolder> {
 
     EntryItemClickInterface entryItemClickInterface;
@@ -294,6 +297,23 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
         void onBookmarkButtonClick(String bool, long id);
         void onSelectionModeChanged(boolean isSelectionMode);
         void onItemSelected(EntryInfo entryInfo);
+    }
+
+    /**
+     * Returns the current list of entry IDs in the order they appear in the adapter.
+     * This reflects the user's current sort and filter settings.
+     * 
+     * @return List of entry IDs in adapter order
+     */
+    public List<Long> getCurrentIdList() {
+        List<Long> ids = new ArrayList<>();
+        for (int i = 0; i < getItemCount(); i++) {
+            EntryInfo entry = getItem(i);
+            if (entry != null) {
+                ids.add(entry.getEntryId());
+            }
+        }
+        return ids;
     }
 
     public String covertTimeToText(Date date) {

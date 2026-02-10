@@ -32,7 +32,9 @@ import com.adriana.newscompanion.data.entry.EntryRepository;
 import com.adriana.newscompanion.data.playlist.PlaylistRepository;
 import com.adriana.newscompanion.data.sharedpreferences.SharedPreferencesRepository;
 import com.adriana.newscompanion.model.EntryInfo;
+import com.adriana.newscompanion.model.PlaybackStateModel;
 import com.adriana.newscompanion.ui.webview.WebViewListener;
+import java.util.Arrays;  // Add this line
 
 @AndroidEntryPoint
 public class TtsService extends MediaBrowserServiceCompat {
@@ -58,6 +60,15 @@ public class TtsService extends MediaBrowserServiceCompat {
     private boolean serviceInStartedState;
     private boolean isPreparing = false;
     private static MediaSessionCompat mediaSessionInstance;
+    
+    // Queue state management
+    private final List<Long> playbackQueue = new ArrayList<>();
+    private int currentQueueIndex = -1;
+    private boolean isQueueInitialized = false;
+    private long[] currentPlaylistForNotification = null;
+    
+    // Cache last PlaybackStateModel for onPlay() callback
+    private PlaybackStateModel lastPlaybackStateModel = null;
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -73,6 +84,9 @@ public class TtsService extends MediaBrowserServiceCompat {
         ttsNotification = new TtsNotification(this);
 
         mediaSession = new MediaSessionCompat(this, TAG);
+        Log.e("MEDIA_TRACE", "🎯 MediaSession CREATED");
+        Log.e("MEDIA_TRACE", "🎯 MediaSession token = " + mediaSession.getSessionToken());
+        
         mediaSession.setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS |
                 MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS);
         mediaSession.setCallback(callback);
@@ -122,197 +136,175 @@ public class TtsService extends MediaBrowserServiceCompat {
 
     @Override
     public void onLoadChildren(@NonNull String parentId, @NonNull Result<List<MediaBrowserCompat.MediaItem>> result) {
-        // We revert to the simplest possible implementation.
-        // The responsibility of loading the playlist and preparing the data now belongs
-        // to the onPrepareFromMediaId method, which is triggered by the client.
-        // This method will now only return the media items AFTER they have been prepared.
         result.sendResult(ttsPlaylist.getMediaItems());
     }
 
     private final MediaSessionCompat.Callback callback = new MediaSessionCompat.Callback() {
 
-        // The onPrepare method is now deprecated in our new flow, but we keep it to avoid crashes.
         @Override
         public void onPrepare() {
-            Log.w(TAG, "onPrepare() was called directly, but this is deprecated. The client should call onPrepareFromMediaId instead.");
-            // Do nothing.
+            Log.w(TAG, "onPrepare() was called directly, but this is deprecated.");
         }
 
         @Override
         public void onPrepareFromMediaId(String mediaId, Bundle extras) {
-            Log.e("LIFECYCLE_DEBUG", "--- 2. onPrepareFromMediaId called with ID: " + mediaId + " ---");
-
-            // --- THIS IS THE FIX for the race condition ---
-            if (isPreparing) {
-                Log.w(TAG, "onPrepareFromMediaId called while already preparing. Ignoring request.");
-                return;
-            }
-            isPreparing = true; // Lock: Set the flag immediately.
-            // --- END OF FIX ---
-
+            Log.d(TAG, "onPrepareFromMediaId called with ID: " + mediaId);
+            
             long entryId;
             try {
                 entryId = Long.parseLong(mediaId);
             } catch (NumberFormatException e) {
                 Log.e(TAG, "Invalid mediaId passed to onPrepareFromMediaId", e);
-                isPreparing = false;
                 return;
             }
 
-            // --- EARLY READINESS CHECK (Main Thread) ---
-            Entry quickCheckEntry = entryRepository.getEntryById(entryId);
-            if (quickCheckEntry != null) {
-                String quickCheckContent = sharedPreferencesRepository.getCurrentTtsContent();
-                if (quickCheckContent == null || quickCheckContent.trim().isEmpty()) {
-                    boolean isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(entryId);
-                    quickCheckContent = (isTranslatedView && quickCheckEntry.getTranslated() != null && !quickCheckEntry.getTranslated().trim().isEmpty())
-                            ? quickCheckEntry.getTranslated()
-                            : quickCheckEntry.getContent();
-                }
-                
-                if (quickCheckContent == null || quickCheckContent.trim().length() < MINIMUM_TTS_CONTENT_LENGTH) {
-                    Log.w(TAG, "Content not ready for TTS. Length: " + (quickCheckContent != null ? quickCheckContent.trim().length() : 0) + 
-                            " (minimum required: " + MINIMUM_TTS_CONTENT_LENGTH + ")");
-                    isPreparing = false;
-                    
-                    PlaybackStateCompat stoppedState = new PlaybackStateCompat.Builder()
-                            .setState(PlaybackStateCompat.STATE_STOPPED, 0, 1.0f)
-                            .setActions(
-                                    PlaybackStateCompat.ACTION_PLAY |
-                                    PlaybackStateCompat.ACTION_PAUSE |
-                                    PlaybackStateCompat.ACTION_SKIP_TO_NEXT |
-                                    PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
-                            )
-                            .build();
-                    mediaSession.setPlaybackState(stoppedState);
-                    
-                    Bundle errorExtras = new Bundle();
-                    errorExtras.putString("ERROR_MESSAGE", "Article is still being prepared. Please try again in a moment.");
-                    mediaSession.setExtras(errorExtras);
-                    return;
-                }
+            EntryInfo entryInfo = entryRepository.getEntryInfoById(entryId);
+            if (entryInfo == null) {
+                Log.e(TAG, "Could not load entry info for: " + entryId);
+                return;
             }
-            // --- END OF EARLY READINESS CHECK ---
 
-            Disposable onPrepareDisposable = Completable.fromAction(() -> {
-                        Log.e("LIFECYCLE_DEBUG", "3. onPrepareFromMediaId: Background task STARTED.");
+            preparedData = new MediaMetadataCompat.Builder()
+                    .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, Long.toString(entryId))
+                    .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, entryInfo.getFeedTitle())
+                    .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, entryInfo.getEntryTitle())
+                    .build();
 
-                        // 1. Get the full playlist of IDs from the repository.
-                        String playlistIdString = playlistRepository.getLatestPlaylist();
-                        List<Long> playlistIds = new ArrayList<>();
-                        if (playlistIdString != null && !playlistIdString.isEmpty()) {
-                            String[] ids = playlistIdString.split(",");
-                            for (String idStr : ids) {
-                                if (!idStr.isEmpty()) {
-                                    try {
-                                        playlistIds.add(Long.parseLong(idStr));
-                                    } catch (NumberFormatException e) {
-                                        Log.e(TAG, "Failed to parse ID from playlist string: " + idStr, e);
-                                    }
-                                }
-                            }
-                        }
+            if (!mediaSession.isActive()) {
+                mediaSession.setActive(true);
+            }
+            mediaSession.setMetadata(preparedData);
+            
+            Log.d(TAG, "Metadata prepared for entry: " + entryId);
+        }
 
-                        // 2. Give the fresh, complete playlist to our TtsPlaylist instance.
-                        ttsPlaylist.setPlaylist(playlistIds, entryId);
+        @Override
+        public void onPlayFromMediaId(String mediaId, Bundle extras) {
+            Log.e("MEDIA_TRACE", "🔥 CALLBACK: onPlayFromMediaId()");
+            Log.e("MEDIA_TRACE", "   mediaId = " + mediaId);
+            Log.e("MEDIA_TRACE", "   extras = " + (extras == null ? "null" : extras.keySet()));
+            Log.d(TAG, "🎵 onPlayFromMediaId called for ID: " + mediaId);
+            
+            // STEP 3: Service ONLY uses PlaybackStateModel - NO database queries
+            if (extras == null || !extras.containsKey("playback_state")) {
+                Log.e(TAG, "❌ No PlaybackStateModel in extras! Cannot play.");
+                Log.e(TAG, "   UI must send complete PlaybackStateModel.");
+                updatePlaybackState(PlaybackStateCompat.STATE_ERROR);
+                return;
+            }
+            
+            PlaybackStateModel playbackModel = extras.getParcelable("playback_state");
+            if (playbackModel == null) {
+                Log.e(TAG, "❌ PlaybackStateModel is null!");
+                updatePlaybackState(PlaybackStateCompat.STATE_ERROR);
+                return;
+            }
+            
+            Log.d(TAG, "✅ Received PlaybackStateModel:");
+            Log.d(TAG, "   Mode: " + playbackModel.mode);
+            Log.d(TAG, "   Playlist size: " + playbackModel.entryIds.size());
+            Log.d(TAG, "   Current index: " + playbackModel.currentIndex);
+            Log.d(TAG, "   Language: " + playbackModel.language);
+            Log.d(TAG, "   Text to read length: " + playbackModel.textToRead.length());
+            
+            // Cache PlaybackStateModel for onPlay() callback
+            lastPlaybackStateModel = playbackModel;
+            
+            // Update queue from PlaybackStateModel
+            playbackQueue.clear();
+            playbackQueue.addAll(playbackModel.entryIds);
+            currentQueueIndex = playbackModel.currentIndex;
+            isQueueInitialized = true;
+            
+            // Store playlist for notification
+            currentPlaylistForNotification = new long[playbackModel.entryIds.size()];
+            for (int i = 0; i < playbackModel.entryIds.size(); i++) {
+                currentPlaylistForNotification[i] = playbackModel.entryIds.get(i);
+            }
+            
+            // Validate content (AUTHORITATIVE from UI)
+            if (playbackModel.textToRead == null || playbackModel.textToRead.trim().isEmpty()) {
+                Log.e(TAG, "❌ No content to read in PlaybackStateModel!");
+                updatePlaybackState(PlaybackStateCompat.STATE_PAUSED);
+                return;
+            }
+            
+            // Prepare metadata
+            preparedData = new MediaMetadataCompat.Builder()
+                    .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, String.valueOf(playbackModel.currentEntryId))
+                    .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, playbackModel.feedTitle)
+                    .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, playbackModel.entryTitle)
+                    .build();
+            
+            if (!mediaSession.isActive()) {
+                mediaSession.setActive(true);
+            }
+            mediaSession.setMetadata(preparedData);
+            
+            // Extract and play (using UI's text, NOT database content)
+            ttsPlayer.extract(playbackModel.currentEntryId, 0, playbackModel.textToRead, playbackModel.language);
+            
+            // CRITICAL: Ensure MediaSession is active before updating state
+            if (!mediaSession.isActive()) {
+                Log.w(TAG, "⚠️ MediaSession was not active, activating now");
+                mediaSession.setActive(true);
+            }
+            
+            // CRITICAL FIX: Android TTS doesn't reliably resume after pause
+            // Always stop and re-extract to ensure TTS works
+            Log.d(TAG, "🔄 Forcing TTS re-preparation (Android TTS resume workaround)");
+            ttsPlayer.stop();
 
-                        // 3. Now that the playlist is correctly initialized, get the metadata.
-                        preparedData = ttsPlaylist.getCurrentMetadata();
-                        Log.e("LIFECYCLE_DEBUG", "4. onPrepareFromMediaId: Background task FINISHED. preparedData is " + (preparedData == null ? "NULL" : "NOT NULL"));
+            // Re-extract with same content
+            boolean extractSuccess = ttsPlayer.extract(
+                playbackModel.currentEntryId,
+                0,
+                playbackModel.textToRead,
+                playbackModel.language
+            );
 
-                        if (preparedData == null) {
-                            throw new IllegalStateException("PreparedData is null after loading, cannot prepare playback.");
-                        }
+            if (!extractSuccess) {
+                Log.e(TAG, "❌ TTS extraction failed");
+                updatePlaybackState(PlaybackStateCompat.STATE_ERROR);
+                return;
+            }
 
-                        // The rest of the preparation logic remains the same.
-                        if (!ttsPlayer.isPausedManually()) {
-                            ttsPlayer.setupMediaPlayer(false);
-                        }
-                        if (ttsPlayer.ttsIsNull()) {
-                            ttsPlayer.initTts(TtsService.this, new TtsPlayerListener(), callback);
-                        }
+            // FORCE SPEAK: If UI sends PlaybackStateModel, Service MUST always speak
+            // Remove all isPausedManually checks - UI is the boss
+            Log.d(TAG, "🎯 UI sent PlaybackStateModel - forcing speak (ignoring paused state)");
+            ttsPlayer.speak();
 
-                        // Get the entry to determine feedId
-                        Entry entry = entryRepository.getEntryById(entryId);
-                        if (entry == null) {
-                            throw new IllegalStateException("Entry not found for ID: " + entryId);
-                        }
-                        
-                        // CRITICAL: Ensure feed language is detected BEFORE proceeding
-                        String detectedFeedLanguage = ttsExtractor.ensureFeedLanguageDetected(entry.getFeedId());
-                        Log.d(TAG, "Feed language ensured for entry " + entryId + ": " + detectedFeedLanguage);
-                        
-                        // First, try to get content and language from SharedPreferences (set by WebViewActivity)
-                        String content = sharedPreferencesRepository.getCurrentTtsContent();
-                        String languageToUse = sharedPreferencesRepository.getCurrentTtsLang();
-
-                        // Fallback to DB content if not set in SharedPreferences
-                        if (content == null || content.trim().isEmpty()) {
-                            boolean isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(entryId);
-
-                            String original = entry.getContent();
-                            String translated = entry.getTranslated();
-                            content = (isTranslatedView && translated != null && !translated.trim().isEmpty()) ? translated : original;
-
-                            // Use the freshly detected/verified feed language
-                            String targetLanguage = sharedPreferencesRepository.getDefaultTranslationLanguage();
-                            languageToUse = isTranslatedView ? targetLanguage : detectedFeedLanguage;
-                        }
-
-                        ttsPlayer.stopTtsPlayback();
-                        ttsPlayer.extract(entryId, entry.getFeedId(), content, languageToUse);
-                    })
-                    .subscribeOn(Schedulers.newThread())
-                    .observeOn(AndroidSchedulers.mainThread())
-                    .subscribe(() -> {
-                        Log.e("LIFECYCLE_DEBUG", "--- 5. onPrepareFromMediaId onComplete (Main Thread) ---");
-                        isPreparing = false;
-                        if (preparedData != null) {
-                            if (!mediaSession.isActive()) {
-                                mediaSession.setActive(true);
-                            }
-                            mediaSession.setMetadata(preparedData);
-                            ttsPlayer.setTtsSpeechRate(Float.parseFloat(preparedData.getString("ttsSpeechRate")));
-                            notifyChildrenChanged("success");
-                        }
-
-                        /*if (!ttsPlayer.isPausedManually()) {
-                            ttsPlayer.speak();
-                        }*/
-                    }, error -> {
-                        Log.e("LIFECYCLE_DEBUG", "--- X. onPrepareFromMediaId onError (Main Thread) ---", error);
-                        isPreparing = false;
-                        
-                        // Set STATE_STOPPED to indicate playback cannot proceed
-                        PlaybackStateCompat stoppedState = new PlaybackStateCompat.Builder()
-                                .setState(PlaybackStateCompat.STATE_STOPPED, 0, 1.0f)
-                                .setActions(
-                                        PlaybackStateCompat.ACTION_PLAY |
-                                        PlaybackStateCompat.ACTION_PAUSE |
-                                        PlaybackStateCompat.ACTION_SKIP_TO_NEXT |
-                                        PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
-                                )
-                                .build();
-                        mediaSession.setPlaybackState(stoppedState);
-                        
-                        // Send error message via extras for UI to display (for real errors only)
-                        Bundle errorExtras = new Bundle();
-                        errorExtras.putString("ERROR_MESSAGE", "An unexpected error occurred. Please try again.");
-                        mediaSession.setExtras(errorExtras);
-                    });
-
-            disposables.add(onPrepareDisposable);
+            // CRITICAL: Update state IMMEDIATELY after speak()
+            updatePlaybackState(PlaybackStateCompat.STATE_PLAYING);
+            Log.d(TAG, "✅ Playback state set to PLAYING");
+            
+            Log.d(TAG, "✅ Playback started for entry " + playbackModel.currentEntryId + " (mode: " + playbackModel.mode + ")");
         }
 
         @Override
         public void onPlay() {
-            Log.d(TAG, "onPlay called");
-            if (!ttsPlayer.isPreparing()) {
-                ttsPlayer.setPausedManually(false);
-                ttsPlayer.setupMediaPlayer(false);
-                play();
+            Log.e("MEDIA_TRACE", "🔥 CALLBACK: onPlay()");
+            Log.d(TAG, "▶️ onPlay called (MediaSession callback)");
+            
+            // Reuse cached PlaybackStateModel - NO database queries
+            if (lastPlaybackStateModel == null) {
+                Log.e(TAG, "❌ onPlay failed: no cached PlaybackStateModel");
+                Log.e(TAG, "   UI must call playFromMediaId first to initialize state");
+                return;
             }
+            
+            Log.d(TAG, "✅ Reusing cached PlaybackStateModel for resume");
+            
+            // Re-package and call onPlayFromMediaId with cached state
+            Bundle extras = new Bundle();
+            extras.putParcelable("playback_state", lastPlaybackStateModel);
+            
+            onPlayFromMediaId(
+                String.valueOf(lastPlaybackStateModel.currentEntryId),
+                extras
+            );
         }
+
 
         @Override
         public void onPause() {
@@ -328,199 +320,76 @@ public class TtsService extends MediaBrowserServiceCompat {
 
         @Override
         public void onStop() {
-            Log.d(TAG, "onStop called");
+            Log.d("🔥PLAYLIST_DEBUG", "⏹️ onStop called - PRESERVING queue for potential resume");
+            Log.d("🔥PLAYLIST_DEBUG", "   Queue size: " + playbackQueue.size());
+            Log.d("🔥PLAYLIST_DEBUG", "   Current index: " + currentQueueIndex);
+            Log.d("🔥PLAYLIST_DEBUG", "   Queue contents: " + playbackQueue.toString());
 
             if (ttsPlayer != null) {
                 ttsPlayer.stop();
                 ContextCompat.getMainExecutor(getApplicationContext()).execute(() -> ttsPlayer.hideFakeLoading());
             }
 
-            //ttsPlaylist.updatePlayingId(0);
-            //mediaSession.setActive(false);
-            //stopSelf();
             updatePlaybackState(PlaybackStateCompat.STATE_STOPPED);
+            Log.d("🔥PLAYLIST_DEBUG", "✅ Stop complete - queue PRESERVED");
         }
 
         @Override
         public void onSkipToNext() {
-            Log.d(TAG, "onSkipToNext called");
-            // 1. Stop any current playback.
-            if (ttsPlayer != null) {
-                ttsPlayer.resetStateForNewArticle();
-                ttsPlayer.stopTtsPlayback();
+            Log.e("MEDIA_TRACE", "🔥 CALLBACK: onSkipToNext()");
+            Log.d(TAG, "⏭️ onSkipToNext called");
+            
+            if (!isQueueInitialized || playbackQueue.isEmpty()) {
+                Log.e(TAG, "❌ Queue not initialized, cannot skip");
+                return;
             }
-            updatePlaybackState(PlaybackStateCompat.STATE_STOPPED);
-
-            // 2. Try to move to the next item in the stateful playlist.
-            if (ttsPlaylist.skipNext()) {
-                // Reset paused state to allow automatic progression
-                ttsPlayer.setPausedManually(false);
-                // 3. If successful, call our NEW, lightweight helper method.
-                prepareAndPlayCurrentTrack();
-                
-                // 4. Notify WebViewActivity to update its UI
-                notifyWebViewActivityOfArticleChange();
-            } else {
-                Log.w(TAG, "Cannot skip next: at the end of the playlist.");
-                updatePlaybackState(PlaybackStateCompat.STATE_STOPPED);
+            
+            if (currentQueueIndex >= playbackQueue.size() - 1) {
+                Log.w(TAG, "🎯 Reached end of queue, pausing");
+                onPause();
+                return;
             }
+            
+            currentQueueIndex++;
+            long nextEntryId = playbackQueue.get(currentQueueIndex);
+            
+            Log.d(TAG, "   Skipping to index " + currentQueueIndex + ", entry ID: " + nextEntryId);
+            
+            // STEP 4: Send callback to UI to load next article
+            Bundle extras = new Bundle();
+            extras.putLong("next_entry_id", nextEntryId);
+            extras.putInt("next_index", currentQueueIndex);
+            
+            // Notify UI via session event
+            mediaSession.sendSessionEvent("request_next_article", extras);
+            
+            Log.d(TAG, "✅ Skip request sent to UI for entry: " + nextEntryId);
         }
 
         @Override
         public void onSkipToPrevious() {
-            Log.d(TAG, "onSkipToPrevious called");
-            // The logic is identical for skipping previous.
-            if (ttsPlayer != null) {
-                ttsPlayer.resetStateForNewArticle();
-                ttsPlayer.stopTtsPlayback();
-            }
-            updatePlaybackState(PlaybackStateCompat.STATE_STOPPED);
-
-            if (ttsPlaylist.skipPrevious()) {
-                prepareAndPlayCurrentTrack();
-                
-                // Notify WebViewActivity to update its UI
-                notifyWebViewActivityOfArticleChange();
-            } else {
-                Log.w(TAG, "Cannot skip previous: at the start of the playlist.");
-                updatePlaybackState(PlaybackStateCompat.STATE_STOPPED);
-            }
-        }
-        
-        /**
-         * Notifies the WebViewActivity to update its UI when the article changes.
-         * This sends a new Intent with FLAG_ACTIVITY_SINGLE_TOP to trigger onNewIntent().
-         */
-        private void notifyWebViewActivityOfArticleChange() {
-            long newEntryId = ttsPlaylist.getPlayingId();
-            EntryInfo entryInfo = entryRepository.getEntryInfoById(newEntryId);
+            Log.e("MEDIA_TRACE", "🔥 CALLBACK: onSkipToPrevious()");
+            Log.d(TAG, "⏮️ onSkipToPrevious called");
             
-            if (entryInfo != null) {
-                Intent intent = new Intent(TtsService.this, com.adriana.newscompanion.ui.webview.WebViewActivity.class);
-                intent.putExtra("entry_id", newEntryId);
-                intent.putExtra("entry_title", entryInfo.getEntryTitle());
-                intent.putExtra("read", false); // Play mode
-                intent.putExtra("from_skip", true); // Mark this as coming from skip action
-                intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
-                
-                Log.d(TAG, "Sending Intent to WebViewActivity for article: " + newEntryId + " (from skip action)");
-                startActivity(intent);
-            } else {
-                Log.e(TAG, "Could not find EntryInfo for ID: " + newEntryId);
-            }
-        }
-
-        private void prepareAndPlayCurrentTrack() {
-            preparedData = ttsPlaylist.getCurrentMetadata();
-            if (preparedData == null) {
-                Log.e(TAG, "prepareAndPlayCurrentTrack failed: metadata was null.");
+            if (!isQueueInitialized || currentQueueIndex <= 0) {
+                Log.w(TAG, "❌ Cannot skip previous: at start of queue");
                 return;
             }
-
-            mediaSession.setMetadata(preparedData);
-            long entryId = Long.parseLong(preparedData.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID));
-            sharedPreferencesRepository.setCurrentReadingEntryId(entryId);
-
-            // --- EARLY READINESS CHECK (Main Thread) ---
-            Entry quickCheckEntry = entryRepository.getEntryById(entryId);
-            if (quickCheckEntry != null) {
-                String quickCheckContent = sharedPreferencesRepository.getCurrentTtsContent();
-                if (quickCheckContent == null || quickCheckContent.trim().isEmpty()) {
-                    boolean isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(entryId);
-                    quickCheckContent = (isTranslatedView && quickCheckEntry.getTranslated() != null && !quickCheckEntry.getTranslated().trim().isEmpty())
-                            ? quickCheckEntry.getTranslated()
-                            : quickCheckEntry.getContent();
-                }
-                
-                if (quickCheckContent == null || quickCheckContent.trim().length() < MINIMUM_TTS_CONTENT_LENGTH) {
-                    Log.w(TAG, "Content not ready for TTS in prepareAndPlayCurrentTrack. Length: " + 
-                            (quickCheckContent != null ? quickCheckContent.trim().length() : 0) + 
-                            " (minimum required: " + MINIMUM_TTS_CONTENT_LENGTH + ")");
-                    
-                    // Reset isPreparing flag to allow future attempts
-                    isPreparing = false;
-                    
-                    PlaybackStateCompat stoppedState = new PlaybackStateCompat.Builder()
-                            .setState(PlaybackStateCompat.STATE_STOPPED, 0, 1.0f)
-                            .setActions(
-                                    PlaybackStateCompat.ACTION_PLAY |
-                                    PlaybackStateCompat.ACTION_PAUSE |
-                                    PlaybackStateCompat.ACTION_SKIP_TO_NEXT |
-                                    PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
-                            )
-                            .build();
-                    mediaSession.setPlaybackState(stoppedState);
-                    
-                    Bundle errorExtras = new Bundle();
-                    errorExtras.putString("ERROR_MESSAGE", "Article is still being prepared. Please try again in a moment.");
-                    mediaSession.setExtras(errorExtras);
-                    return;
-                }
-            }
-            // --- END OF EARLY READINESS CHECK ---
-
-            // This is our single, reliable background task for track changes
-            Disposable trackPreparationDisposable = Completable.fromAction(() -> {
-                        // --- THIS IS THE FINAL, CORRECT FLOW ---
-                        // 1. Get the entry to determine feedId
-                        Entry entry = entryRepository.getEntryById(entryId);
-                        if (entry == null) {
-                            throw new IllegalStateException("Entry not found for ID: " + entryId);
-                        }
-                        
-                        // 2. CRITICAL: Ensure feed language is detected BEFORE proceeding
-                        String detectedFeedLanguage = ttsExtractor.ensureFeedLanguageDetected(entry.getFeedId());
-                        Log.d(TAG, "Feed language ensured for entry " + entryId + ": " + detectedFeedLanguage);
-                        
-                        // 3. Get the content for the player.
-                        // First, try to get content and language from SharedPreferences (set by WebViewActivity)
-                        String content = sharedPreferencesRepository.getCurrentTtsContent();
-                        String languageToUse = sharedPreferencesRepository.getCurrentTtsLang();
-
-                        // Fallback to DB content if not set in SharedPreferences
-                        if (content == null || content.trim().isEmpty()) {
-                            boolean isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(entryId);
-                            content = (isTranslatedView && entry.getTranslated() != null && !entry.getTranslated().trim().isEmpty())
-                                    ? entry.getTranslated()
-                                    : entry.getContent();
-                            // Use the freshly detected/verified feed language
-                            languageToUse = (isTranslatedView)
-                                    ? sharedPreferencesRepository.getDefaultTranslationLanguage()
-                                    : detectedFeedLanguage;
-                        }
-
-                        // 4. Call the synchronous extract method on this background thread.
-                        boolean success = ttsPlayer.extract(entryId, entry.getFeedId(), content, languageToUse);
-                        if (!success) {
-                            throw new IllegalStateException("Extraction failed for entry ID: " + entryId);
-                        }
-
-                        // 3. Call the new synchronous setup method on this background thread.
-                        ttsPlayer.setupTts();
-                        // --- END OF BACKGROUND WORK ---
-                    })
-                    .subscribeOn(Schedulers.io()) // Run all background work on a single background thread.
-                    .observeOn(AndroidSchedulers.mainThread()) // Switch to the main thread for the final command.
-                    .subscribe(() -> {
-                        // 4. Now that everything is prepared, tell the player to speak.
-                        Log.d(TAG, "Track preparation complete, calling speak().");
-                        if (!ttsPlayer.isPausedManually()) {
-                            ttsPlayer.speak();
-                        }
-                    }, error -> {
-                        Log.e(TAG, "Error during prepareAndPlayCurrentTrack", error);
-                    });
-
-            disposables.add(trackPreparationDisposable);
-        }
-
-        private void play() {
-            // The main play button can now use the modern entry point if data isn't ready.
-            if (preparedData == null) {
-                onPrepareFromMediaId(String.valueOf(sharedPreferencesRepository.getCurrentReadingEntryId()), null);
-            } else {
-                ttsPlayer.play();
-            }
+            
+            currentQueueIndex--;
+            long prevEntryId = playbackQueue.get(currentQueueIndex);
+            
+            Log.d(TAG, "   Skipping to index " + currentQueueIndex + ", entry ID: " + prevEntryId);
+            
+            // STEP 4: Send callback to UI to load previous article
+            Bundle extras = new Bundle();
+            extras.putLong("prev_entry_id", prevEntryId);
+            extras.putInt("prev_index", currentQueueIndex);
+            
+            // Notify UI via session event
+            mediaSession.sendSessionEvent("request_previous_article", extras);
+            
+            Log.d(TAG, "✅ Skip request sent to UI for entry: " + prevEntryId);
         }
 
         @Override
@@ -553,15 +422,14 @@ public class TtsService extends MediaBrowserServiceCompat {
             Log.d(TAG, "onCustomAction: Action = " + action);
             switch (action) {
                 case "autoPlay":
-                    play();
+                    if (currentQueueIndex != -1 && isQueueInitialized) {
+                        long currentId = playbackQueue.get(currentQueueIndex);
+                        onPlayFromMediaId(String.valueOf(currentId), null);
+                    }
                     break;
                 case "playFromService":
-                    if (preparedData == null) {
-                        onPrepare();
-                    } else {
-                        if (!ttsPlayer.isUiControlPlayback()) {
-                            ttsPlayer.play();
-                        }
+                    if (preparedData != null && !ttsPlayer.isUiControlPlayback()) {
+                        ttsPlayer.play();
                     }
                     break;
                 case "contentChangedSummary":
@@ -575,14 +443,13 @@ public class TtsService extends MediaBrowserServiceCompat {
                         boolean success = ttsPlayer.extract(currentEntryId, entryRepository.getEntryById(currentEntryId).getFeedId(), newContent, newLang);
                         if (success) {
                             ttsPlayer.setupTts();
-                            if (!ttsPlayer.isPausedManually()) {
-                                ttsPlayer.speak();
-                            }
+                            // FORCE SPEAK: Remove isPausedManually check - UI is boss
+                            Log.d(TAG, "🎯 contentChangedSummary - forcing speak (ignoring paused state)");
+                            ttsPlayer.speak();
                         }
                     }
                     break;
                 case "contentChangedTranslation":
-                    // Restart TTS with new content from SharedPreferences, maintain sentence position
                     long currentEntryId2 = sharedPreferencesRepository.getCurrentReadingEntryId();
                     String newContent2 = sharedPreferencesRepository.getCurrentTtsContent();
                     String newLang2 = sharedPreferencesRepository.getCurrentTtsLang();
@@ -590,14 +457,13 @@ public class TtsService extends MediaBrowserServiceCompat {
                         ttsPlayer.stopTtsPlayback();
                         boolean success = ttsPlayer.extract(currentEntryId2, entryRepository.getEntryById(currentEntryId2).getFeedId(), newContent2, newLang2);
                         if (success) {
-                            // Set sentence counter to the saved sentence index, clamped to new content size
                             int savedSentenceIndex = sharedPreferencesRepository.getCurrentTtsSentencePosition();
                             int clampedSentenceIndex = Math.min(savedSentenceIndex, ttsPlayer.getSentences().size() - 1);
                             entryRepository.updateSentCount(clampedSentenceIndex, currentEntryId2);
                             ttsPlayer.setupTts();
-                            if (!ttsPlayer.isPausedManually()) {
-                                ttsPlayer.speak();
-                            }
+                            // FORCE SPEAK: Remove isPausedManually check - UI is boss
+                            Log.d(TAG, "🎯 contentChangedTranslation - forcing speak (ignoring paused state)");
+                            ttsPlayer.speak();
                         }
                     }
                     break;
@@ -613,6 +479,16 @@ public class TtsService extends MediaBrowserServiceCompat {
         }
 
         private void updatePlaybackState(int state) {
+            Log.e("MEDIA_TRACE", "🎯 setPlaybackState called, state=" + state);
+            Log.e("MEDIA_TRACE", "🎯 mediaSession.isActive() = " + mediaSession.isActive());
+            Log.d(TAG, "🔄 updatePlaybackState called with state: " + state);
+            
+            // CRITICAL: Ensure MediaSession is active
+            if (!mediaSession.isActive()) {
+                Log.w(TAG, "⚠️ MediaSession not active in updatePlaybackState, activating now");
+                mediaSession.setActive(true);
+            }
+            
             PlaybackStateCompat.Builder stateBuilder = new PlaybackStateCompat.Builder();
             stateBuilder.setActions(
                     PlaybackStateCompat.ACTION_PLAY |
@@ -625,7 +501,12 @@ public class TtsService extends MediaBrowserServiceCompat {
                             PlaybackStateCompat.ACTION_REWIND
             );
             stateBuilder.setState(state, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1.0f, SystemClock.elapsedRealtime());
-            mediaSession.setPlaybackState(stateBuilder.build());
+            
+            PlaybackStateCompat newState = stateBuilder.build();
+            mediaSession.setPlaybackState(newState);
+            
+            Log.d(TAG, "✅ MediaSession playback state updated to: " + state);
+            Log.d(TAG, "   Actions enabled: PLAY, PAUSE, SKIP_NEXT, SKIP_PREVIOUS, FF, REWIND");
 
             if (ttsPlayer != null) {
                 if (state == PlaybackStateCompat.STATE_BUFFERING || state == PlaybackStateCompat.STATE_CONNECTING) {
@@ -641,7 +522,6 @@ public class TtsService extends MediaBrowserServiceCompat {
                     });
                 }
             }
-            Log.d("TTS", "PlaybackState updated to: " + state);
         }
     };
 
@@ -654,8 +534,7 @@ public class TtsService extends MediaBrowserServiceCompat {
         }
 
         @Override
-        public void
-        onPlaybackStateChange(PlaybackStateCompat state) {
+        public void onPlaybackStateChange(PlaybackStateCompat state) {
             mediaSession.setPlaybackState(state);
 
             switch (state.getState()) {
@@ -677,7 +556,7 @@ public class TtsService extends MediaBrowserServiceCompat {
 
             private void moveServiceToStartedState(PlaybackStateCompat state) {
                 Log.d(TAG, "notification to play");
-                Notification notification = ttsNotification.getNotification(preparedData, state, getSessionToken());
+                Notification notification = ttsNotification.getNotification(preparedData, state, getSessionToken(), currentPlaylistForNotification);
 
                 if (!serviceInStartedState) {
                     ContextCompat.startForegroundService(TtsService.this, intent);
@@ -696,7 +575,7 @@ public class TtsService extends MediaBrowserServiceCompat {
                     stopForeground(false);
                 }
 
-                Notification notification = ttsNotification.getNotification(preparedData, state, getSessionToken());
+                Notification notification = ttsNotification.getNotification(preparedData, state, getSessionToken(), currentPlaylistForNotification);
                 ttsNotification.getNotificationManager().notify(TtsNotification.TTS_NOTIFICATION_ID, notification);
             }
 
@@ -710,6 +589,7 @@ public class TtsService extends MediaBrowserServiceCompat {
             }
         }
     }
+    
     public static MediaSessionCompat getMediaSession() {
         return mediaSession;
     }

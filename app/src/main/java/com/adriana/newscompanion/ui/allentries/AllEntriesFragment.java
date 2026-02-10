@@ -308,6 +308,16 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
         intent.putExtra("read", false);
         intent.putExtra("entry_title", isTranslated ? entryInfo.getTranslatedTitle() : entryInfo.getEntryTitle());
         intent.putExtra("is_translated", isTranslated);
+        
+        // FIX: Add complete playlist (full filtered/sorted result set)
+        long[] playlistIds = new long[entries.size()];
+        for (int i = 0; i < entries.size(); i++) {
+            playlistIds[i] = entries.get(i).getEntryId();
+        }
+        intent.putExtra("playlist_ids", playlistIds);
+        
+        android.util.Log.d("PLAYLIST_FIX", "✅ onEntryClick: Sending FULL playlist. Size=" + playlistIds.length);
+        
         allEntriesViewModel.updateVisitedDate(entryInfo.getEntryId());
         startActivity(intent);
     }
@@ -361,6 +371,7 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
         EntryInfo entryToOpen = null;
         for (EntryInfo info : entries) if (info.getEntryId() == entryId) entryToOpen = info;
         if (entryToOpen == null) return;
+        
         Intent intent = new Intent(getContext(), WebViewActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
         intent.putExtra("read", false);
@@ -368,9 +379,17 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
         boolean isTranslated = entryToOpen.getTranslatedTitle() != null;
         intent.putExtra("entry_title", isTranslated ? entryToOpen.getTranslatedTitle() : entryToOpen.getEntryTitle());
         intent.putExtra("is_translated", isTranslated);
-        List<Long> allIds = new ArrayList<>();
-        for (EntryInfo info : entries) allIds.add(info.getEntryId());
-        allEntriesViewModel.insertPlaylist(allIds, entryId);
+        
+        // FIX: Use complete list from entries (full filtered/sorted result set)
+        // NOT adapter.getCurrentIdList() which only has loaded window
+        long[] playlistIds = new long[entries.size()];
+        for (int i = 0; i < entries.size(); i++) {
+            playlistIds[i] = entries.get(i).getEntryId();
+        }
+        intent.putExtra("playlist_ids", playlistIds);
+        
+        android.util.Log.d("PLAYLIST_FIX", "✅ onPlayingButtonClick: Sending FULL playlist. Size=" + playlistIds.length);
+        
         allEntriesViewModel.updateVisitedDate(entryId);
         startActivity(intent);
     }
@@ -380,6 +399,7 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
         EntryInfo entryToOpen = null;
         for (EntryInfo info : entries) if (info.getEntryId() == entryId) entryToOpen = info;
         if (entryToOpen == null) return;
+        
         Intent intent = new Intent(getContext(), WebViewActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
         intent.putExtra("read", true);
@@ -387,9 +407,17 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
         boolean isTranslated = entryToOpen.getTranslatedTitle() != null;
         intent.putExtra("entry_title", isTranslated ? entryToOpen.getTranslatedTitle() : entryToOpen.getEntryTitle());
         intent.putExtra("is_translated", isTranslated);
-        List<Long> allIds = new ArrayList<>();
-        for (EntryInfo info : entries) allIds.add(info.getEntryId());
-        allEntriesViewModel.insertPlaylist(allIds, entryId);
+        
+        // FIX: Use complete list from entries (full filtered/sorted result set)
+        // NOT adapter.getCurrentIdList() which only has loaded window
+        long[] playlistIds = new long[entries.size()];
+        for (int i = 0; i < entries.size(); i++) {
+            playlistIds[i] = entries.get(i).getEntryId();
+        }
+        intent.putExtra("playlist_ids", playlistIds);
+        
+        android.util.Log.d("PLAYLIST_FIX", "✅ onReadingButtonClick: Sending FULL playlist. Size=" + playlistIds.length);
+        
         allEntriesViewModel.updateVisitedDate(entryId);
         startActivity(intent);
     }
