@@ -168,6 +168,25 @@ public class TtsPlaylist {
         return -1;
     }
 
+    public int getCurrentIndex() {
+        return currentIndex;
+    }
+
+    public int size() {
+        return playlistIds != null ? playlistIds.size() : 0;
+    }
+
+    public long get(int index) {
+        if (playlistIds != null && index >= 0 && index < playlistIds.size()) {
+            return playlistIds.get(index);
+        }
+        return -1;
+    }
+
+    public int indexOf(long id) {
+        return playlistIds != null ? playlistIds.indexOf(id) : -1;
+    }
+
     // --- Private helper method to parse the ID list ---
     private List<Long> stringToLongList(String idListString) {
         List<Long> list = new ArrayList<>();

@@ -90,6 +90,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     private MenuItem summarizeButton;
     private String currentLink;
     private long currentId;
+    private int currentPlaylistIndex = -1;
     private long feedId;
     private String html;
     private String content;
@@ -236,21 +237,13 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                     Log.e("UI_TRACE", "   event = " + event);
                     Log.e("UI_TRACE", "   extras = " + (extras == null ? "null" : extras.keySet()));
                     super.onSessionEvent(event, extras);
-                    
+
                     if ("request_next_article".equals(event)) {
                         Log.e("UI_TRACE", "➡️ request_next_article in mediaControllerCallback");
-                        long nextEntryId = extras.getLong("next_entry_id", -1);
-                        int nextIndex = extras.getInt("next_index", -1);
-                        if (nextEntryId > 0) {
-                            loadArticleForPlayback(nextEntryId, nextIndex);
-                        }
+                        handleNextArticle();
                     } else if ("request_previous_article".equals(event)) {
                         Log.e("UI_TRACE", "⬅️ request_previous_article in mediaControllerCallback");
-                        long prevEntryId = extras.getLong("prev_entry_id", -1);
-                        int prevIndex = extras.getInt("prev_index", -1);
-                        if (prevEntryId > 0) {
-                            loadArticleForPlayback(prevEntryId, prevIndex);
-                        }
+                        handlePreviousArticle();
                     }
                 }
             };
@@ -490,6 +483,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         long entryId = getIntent().getLongExtra("entry_id", -1);
         if (entryId == -1) { makeSnackbar("Error: No article ID provided."); finish(); return; }
         currentId = entryId;
+        currentPlaylistIndex = ttsPlaylist.indexOf(currentId);
 
         EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
         if (entryInfo == null) { makeSnackbar("Error: Could not load article data."); finish(); return; }
@@ -597,10 +591,9 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             bookmarkButton.setIcon(ContextCompat.getDrawable(this, R.drawable.ic_bookmark_filled));
         }
 
-        if (langForTts == null || langForTts.trim().isEmpty()) langForTts = "en";
-        if (contentForTts != null && !contentForTts.trim().isEmpty()) {
-            ttsPlayer.extract(currentId, feedId, contentForTts, langForTts);
-        }
+        // ❌ REMOVED: UI must NEVER call ttsPlayer.extract()
+        // Only Service calls extract() when user presses Play
+        // This was the ROOT CAUSE of all TTS bugs!
 
         sharedPreferencesRepository.setCurrentTtsContent(contentForTts);
         sharedPreferencesRepository.setCurrentTtsLang(langForTts);
@@ -1251,69 +1244,69 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         switchPlayModeButton.setVisible(true);
     }
 
+    private void handleNextArticle() {
+        if (currentPlaylistIndex < 0) return;
+        int nextIndex = currentPlaylistIndex + 1;
+        if (nextIndex >= ttsPlaylist.size()) {
+            makeSnackbar("This is the last article");
+            return;
+        }
+        long nextEntryId = ttsPlaylist.get(nextIndex);
+        currentPlaylistIndex = nextIndex;
+        loadArticleForPlayback(nextEntryId);
+    }
+
+    private void handlePreviousArticle() {
+        if (currentPlaylistIndex <= 0) {
+            makeSnackbar("This is the first article");
+            return;
+        }
+        int prevIndex = currentPlaylistIndex - 1;
+        long prevEntryId = ttsPlaylist.get(prevIndex);
+        currentPlaylistIndex = prevIndex;
+        loadArticleForPlayback(prevEntryId);
+    }
+
+    private void navigateToEntry(long entryId) {
+        Intent intent = new Intent(this, WebViewActivity.class);
+        intent.putExtra("entry_id", entryId);
+        intent.putExtra("from_skip", true);
+
+        onNewIntent(intent);
+    }
+
     /**
      * STEP 4: Load article for playback after skip button press.
      * Called when Service sends "request_next_article" or "request_previous_article" event.
      * UI loads the article and sends new PlaybackStateModel to Service.
      */
-    private void loadArticleForPlayback(long entryId, int index) {
-        Log.e("UI_TRACE", "🔄 loadArticleForPlayback CALLED");
-        Log.e("UI_TRACE", "   entryId = " + entryId);
-        Log.e("UI_TRACE", "   index = " + index);
-        
+    private void loadArticleForPlayback(long entryId) {
         runOnUiThread(() -> {
-            Log.e("UI_TRACE", "🧵 Running on UI thread");
-            Log.d(TAG, "🔄 Loading article for playback: ID=" + entryId + ", index=" + index);
-            
-            // Update current ID
-            currentId = entryId;
-            
-            // Load entry content
-            EntryInfo entryInfo = webViewViewModel.getEntryInfoById(entryId);
-            Log.e("UI_TRACE", "   entryInfo = " + (entryInfo == null ? "null" : "FOUND"));
-            
-            if (entryInfo == null) {
-                Log.e("UI_TRACE", "❌ EntryInfo is null — aborting UI update");
-                Log.e(TAG, "❌ Entry not found: " + entryId);
-                makeSnackbar("Error: Article not found");
-                return;
-            }
-            
-            // Update UI state (preserve current mode or reset to full)
-            isTranslatedView = sharedPreferencesRepository.getIsTranslatedView(entryId);
-            // Keep summary view if enabled, otherwise show full article
-            boolean summaryExists = entryInfo.getSummary() != null && !entryInfo.getSummary().trim().isEmpty();
-            if (!sharedPreferencesRepository.isSummarizationEnabled() || !summaryExists) {
-                isSummaryView = false;
-            }
-            
-            // Load content into WebView
-            loadEntryContent();
-            Log.e("UI_TRACE", "✅ loadEntryContent() called");
-            
-            // Build new playback state
-            PlaybackStateModel playbackModel = buildPlaybackState();
-            Log.e("UI_TRACE", "   playbackModel = " + (playbackModel == null ? "null" : "BUILT"));
-            if (playbackModel == null) {
-                Log.e(TAG, "❌ Failed to build playback state for skipped article");
-                makeSnackbar("Error: Could not prepare playback");
-                return;
-            }
-            
-            // Override index to match skip position
-            playbackModel.currentIndex = index;
-            
-            // Send to service
-            Bundle extras = new Bundle();
-            extras.putParcelable("playback_state", playbackModel);
-            
-            MediaControllerCompat controller = mMediaBrowserHelper.getMediaController();
-            if (controller != null) {
-                controller.getTransportControls().playFromMediaId(String.valueOf(entryId), extras);
-                Log.d(TAG, "✅ Sent new playback state to service for entry: " + entryId);
-            } else {
-                Log.e(TAG, "❌ MediaController is null, cannot send playback state");
-            }
+            Log.e("UI_TRACE", "🧭 Navigating to article " + entryId + " via skip");
+
+            // 1️⃣ Navigate UI (same as user click)
+            navigateToEntry(entryId);
+
+            // 2️⃣ AFTER navigation, send play command
+            webView.post(() -> {
+                PlaybackStateModel model = buildPlaybackState();
+                if (model == null) {
+                    Log.e("UI_TRACE", "❌ PlaybackStateModel is null after navigation");
+                    return;
+                }
+
+                Bundle extras = new Bundle();
+                extras.putParcelable("playback_state", model);
+
+                MediaControllerCompat controller = mMediaBrowserHelper.getMediaController();
+                if (controller != null) {
+                    controller.getTransportControls()
+                              .playFromMediaId(String.valueOf(entryId), extras);
+                    Log.e("UI_TRACE", "▶️ Sent playFromMediaId for entry " + entryId);
+                } else {
+                    Log.e("UI_TRACE", "❌ MediaController is null");
+                }
+            });
         });
     }
 
@@ -1911,33 +1904,15 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             Log.e("UI_TRACE", "📩 onSessionEvent RECEIVED");
             Log.e("UI_TRACE", "   event = " + event);
             Log.e("UI_TRACE", "   extras = " + (extras == null ? "null" : extras.keySet()));
-            
+
             super.onSessionEvent(event, extras);
-            
+
             if ("request_next_article".equals(event)) {
                 Log.e("UI_TRACE", "➡️ request_next_article detected");
-                long nextEntryId = extras.getLong("next_entry_id", -1);
-                int nextIndex = extras.getInt("next_index", -1);
-                Log.e("UI_TRACE", "   nextEntryId = " + nextEntryId);
-                Log.e("UI_TRACE", "   nextIndex = " + nextIndex);
-                
-                Log.d(TAG, "📨 Received skip next request: ID=" + nextEntryId + ", index=" + nextIndex);
-                
-                if (nextEntryId > 0) {
-                    loadArticleForPlayback(nextEntryId, nextIndex);
-                }
+                handleNextArticle();
             } else if ("request_previous_article".equals(event)) {
                 Log.e("UI_TRACE", "⬅️ request_previous_article detected");
-                long prevEntryId = extras.getLong("prev_entry_id", -1);
-                int prevIndex = extras.getInt("prev_index", -1);
-                Log.e("UI_TRACE", "   prevEntryId = " + prevEntryId);
-                Log.e("UI_TRACE", "   prevIndex = " + prevIndex);
-                
-                Log.d(TAG, "📨 Received skip previous request: ID=" + prevEntryId + ", index=" + prevIndex);
-                
-                if (prevEntryId > 0) {
-                    loadArticleForPlayback(prevEntryId, prevIndex);
-                }
+                handlePreviousArticle();
             }
         }
 

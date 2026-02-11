@@ -77,6 +77,7 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
     private boolean hasSpokenAfterSetup = false;
     private PlaybackUiListener playbackUiListener;
     private int currentExtractProgress = 0;
+    private Runnable onReadyToSpeak = null;
 
     @Inject
     public TtsPlayer(@ApplicationContext Context context, TtsExtractor ttsExtractor, EntryRepository entryRepository, SharedPreferencesRepository sharedPreferencesRepository) {
@@ -130,14 +131,15 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
                 }
 
                 if (isManualSkip) {
-                    Log.d(TAG, "Manual skip — skipping sentenceCounter++ in onDone");
+                    Log.d(TAG, "Manual skip — handling skip logic");
                     isManualSkip = false;
 
                     if (sentenceCounter < sentences.size() - 1) {
                         sentenceCounter++;
-                        speak();
                         entryRepository.updateSentCount(sentenceCounter, currentId);
                         Log.d(TAG, "Manual skip done. Continuing at [#" + sentenceCounter + "]");
+                        // Continue with next sentence in controlled loop
+                        speakNextSentence();
                     } else {
                         Log.d(TAG, "Manual skip finished last sentence. Moving to next article.");
                         entryRepository.updateSentCount(0, currentId);
@@ -153,13 +155,15 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
                     return;
                 }
 
-                if (sentenceCounter < sentences.size() - 1) {
-                    sentenceCounter++;
-                    speak();
-                    entryRepository.updateSentCount(sentenceCounter, currentId);
-                    Log.d(TAG, "Finished [#" + sentenceCounter + "]: " + sentences.get(sentenceCounter));
+                // ✅ CONTROLLED SPEECH LOOP: Advance to next sentence
+                sentenceCounter++;
+                entryRepository.updateSentCount(sentenceCounter, currentId);
+
+                if (sentenceCounter < sentences.size()) {
+                    Log.d(TAG, "Continuing to next sentence [#" + sentenceCounter + "]");
+                    speakNextSentence();
                 } else {
-                    Log.d(TAG, "Finished last sentence. Moving to next article.");
+                    Log.d(TAG, "🏁 Finished last sentence. Moving to next article.");
                     entryRepository.updateSentCount(0, currentId);
                     sentenceCounter = 0;
                     isArticleFinished = true;
@@ -213,11 +217,25 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
     }
 
     public boolean extract(long currentId, long feedId, String content, String language) {
+        Log.e("EXTRACT_TRACE",
+            "extract() called for entryId=" + currentId +
+            " | thread=" + Thread.currentThread().getName() +
+            " | stack=" + Log.getStackTraceString(new Throwable()));
+
         Log.e("TTS_TRACE", "📦 extract() called");
         Log.e("TTS_TRACE", "   entryId = " + currentId);
         Log.e("TTS_TRACE", "   language = " + language);
         Log.e("TTS_TRACE", "   text length = " + (content == null ? "null" : content.length()));
         Log.d(TAG, "Starting extract for article: ID=" + currentId + ", language=" + language);
+
+        // 🔥 FIX #2: MUST RESET EVERYTHING at the VERY TOP when switching articles
+        Log.e("TTS_TRACE", "🧹 Clearing previous article state");
+        this.sentences.clear();
+        this.sentenceCounter = 0;
+        this.isArticleFinished = false;
+        this.isManualSkip = false;
+        this.paragraphStartIndices.clear();
+        if (tts != null) tts.stop();
 
         int currentSentence = -1;
         boolean wasSpeaking = isPlaying();
@@ -228,14 +246,8 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
         }
 
         this.isSettingUpNewArticle = true;
-        if (tts != null) tts.stop();
 
         this.isPreparing = true;
-        this.isArticleFinished = false;
-        this.sentenceCounter = 0;
-        this.isManualSkip = false;
-        this.sentences.clear();
-        this.paragraphStartIndices.clear();
         
         this.currentId = currentId;
         this.feedId = feedId;
@@ -305,6 +317,13 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
             return false;
         }
 
+        // FIX #3: Remove duplicated title sentences
+        if (sentences.size() > 1 &&
+            sentences.get(0).trim().equals(sentences.get(1).trim())) {
+            Log.e("TTS_TRACE", "🧹 Removing duplicated title sentence");
+            sentences.remove(0);
+        }
+
         if (currentSentence != -1) {
             this.sentenceCounter = Math.min(currentSentence, this.sentences.size() - 1);
             entryRepository.updateSentCount(this.sentenceCounter, this.currentId);
@@ -317,8 +336,11 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
         this.isPreparing = false;
         this.isSettingUpNewArticle = false; // Unlock onDone events
 
-        if (wasSpeaking) {
-            new Handler(Looper.getMainLooper()).postDelayed(this::speak, 300);
+        // ✅ CALLBACK: Notify when extract is ready for speech
+        if (onReadyToSpeak != null) {
+            Log.e("TTS_TRACE", "🎯 Extract finished - calling onReadyToSpeak callback");
+            onReadyToSpeak.run();
+            onReadyToSpeak = null; // Clear after use
         }
 
         return true;
@@ -407,9 +429,8 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
             }
             
             isSettingUpNewArticle = false;
-            if (wasSpeaking) {
-                new Handler(Looper.getMainLooper()).postDelayed(this::speak, 300);
-            }
+            // ❌ REMOVED: extractToTts() must NEVER call speak()
+            // speak() is ONLY called from onPlayFromMediaId()
             countDownLatch.countDown();
         }).start();
     }
@@ -506,55 +527,61 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
         }
     }
 
-    public void speak() {
-        Log.e("TTS_TRACE", "🗣️ speak() CALLED");
-        Log.e("TTS_TRACE", "   isSpeaking = " + (tts != null ? tts.isSpeaking() : "null"));
-        Log.e("TTS_TRACE", "   queue size = " + sentences.size());
+    /**
+     * Controlled speech loop - only called from onPlayFromMediaId() and onDone()
+     */
+    public void speakNextSentence() {
+        Log.e("TTS_TRACE", "🎯 speakNextSentence() called");
+        Log.e("TTS_TRACE", "   sentenceCounter = " + sentenceCounter);
+        Log.e("TTS_TRACE", "   sentences.size() = " + sentences.size());
+
+        if (sentenceCounter >= sentences.size()) {
+            Log.e("TTS_TRACE", "🏁 Article finished - no more sentences");
+            setNewState(PlaybackStateCompat.STATE_PAUSED);
+            return;
+        }
 
         if (isSettingUpNewArticle || isPreparing) {
-            Log.d(TAG, "speak() skipped — TTS setup or preparation in progress.");
+            Log.d(TAG, "speakNextSentence() skipped — TTS setup or preparation in progress.");
             return;
         }
 
         if (!isInit || tts == null) {
-            Log.d(TAG, "speak() skipped — TTS not initialized yet. Waiting for init.");
-            actionNeeded = true;
+            Log.d(TAG, "speakNextSentence() skipped — TTS not initialized yet.");
             return;
         }
 
-        if (sentenceCounter < 0) sentenceCounter = 0;
+        String sentence = sentences.get(sentenceCounter);
+        Log.e("TTS_TRACE", "▶️ Speaking sentence #" + sentenceCounter + ": " + sentence.substring(0, Math.min(50, sentence.length())) + "...");
 
-        if (sentenceCounter >= sentences.size()) {
-            Log.d(TAG, "sentenceCounter out of bounds, skipping speak()");
-            return;
+        int result = tts.speak(
+            sentence,
+            TextToSpeech.QUEUE_FLUSH,
+            null,
+            "sentence_" + sentenceCounter
+        );
+
+        Log.e("TTS_TRACE", "📢 TextToSpeech.speak() result = " + result);
+
+        setUiControlPlayback(true);
+        setNewState(PlaybackStateCompat.STATE_PLAYING);
+        if (playbackUiListener != null) {
+            playbackUiListener.onPlaybackStarted();
         }
-
-        if (sentences.size() != 0) {
-            Log.d(TAG, "speak() with language = " + language + ", sentence = " + sentences.get(sentenceCounter));
-
-            if (language == null) {
-                identifyLanguage(sentences.get(sentenceCounter), false);
-            } else {
-                String sentence = sentences.get(sentenceCounter);
-                Log.d(TAG, "TTS Speaking [#" + sentenceCounter + "]: " + sentence);
-
-                // Use QUEUE_FLUSH when starting a new speech after toggle to clear any lingering old audio
-                int queueMode = TextToSpeech.QUEUE_FLUSH;
-
-                Log.e("TTS_TRACE", "▶️ Calling TextToSpeech.speak()");
-                int result = tts.speak(sentence, queueMode, null, TextToSpeech.ACTION_TTS_QUEUE_PROCESSING_COMPLETED);
-                Log.e("TTS_TRACE", "📢 speak() result = " + result);
-
-                setUiControlPlayback(true);
-                setNewState(PlaybackStateCompat.STATE_PLAYING);
-                if (playbackUiListener != null) {
-                    playbackUiListener.onPlaybackStarted();
-                }
-                if (webViewCallback != null) {
-                    webViewCallback.highlightText(sentence);
-                }
-            }
+        if (webViewCallback != null) {
+            webViewCallback.highlightText(sentence);
         }
+    }
+
+    /**
+     * LEGACY METHOD - kept for compatibility but should not be called directly
+     * Use speakNextSentence() in the controlled speech loop instead
+     */
+    @Deprecated
+    public void speak() {
+        Log.w(TAG, "⚠️ speak() called - this should not happen in new architecture");
+        Log.w(TAG, "   Use speakNextSentence() in controlled speech loop instead");
+        speakNextSentence();
     }
 
     public void fastForward() {
@@ -563,7 +590,8 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
             sentenceCounter++;
             entryRepository.updateSentCount(sentenceCounter, currentId);
             tts.stop();
-            speak();
+            // ✅ FIX #4: Skip paragraph must call speakNextSentence()
+            speakNextSentence();
         } else {
             entryRepository.updateSentCount(0, currentId);
             callback.onSkipToNext();
@@ -576,7 +604,8 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
             sentenceCounter--;
             entryRepository.updateSentCount(sentenceCounter, currentId);
             tts.stop(); // interrupt current sentence
-            speak();
+            // ✅ FIX: Skip previous paragraph must also call speakNextSentence()
+            speakNextSentence();
         }
     }
 
@@ -811,6 +840,23 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
         this.isManualSkip = false;
         this.sentences.clear();
         this.paragraphStartIndices.clear();
+    }
+
+    /**
+     * Reset sentence counter for controlled speech loop
+     */
+    public void resetSentenceCounter() {
+        Log.e("TTS_TRACE", "🔄 resetSentenceCounter() called");
+        this.sentenceCounter = 0;
+        this.isArticleFinished = false;
+        this.isManualSkip = false;
+    }
+
+    /**
+     * Set callback to be invoked when extract() finishes
+     */
+    public void setOnReadyToSpeak(Runnable callback) {
+        this.onReadyToSpeak = callback;
     }
 
     public int getCurrentParagraphIndex() {
