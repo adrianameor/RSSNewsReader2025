@@ -258,7 +258,19 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         builder.setItems(entries, (dialog, which) -> {
             makeSnackbar("Translating to " + entries[which]);
             String selectedValue = entryValues[which].toString();
-            sharedPreferencesRepository.setDefaultTranslationLanguage(selectedValue);
+            sharedPreferencesRepository.setDefaultTranslationLanguageReactive(selectedValue);
+
+            // Invalidate immediately
+            new Thread(() -> {
+                entryRepository.invalidateAllAiContentSync();
+            }).start();
+
+            // Restart pipeline
+            //ttsExtractor.extractAllEntries();
+
+            Snackbar.make(findViewById(R.id.webView_view),
+                    "Language changed. Reprocessing...",
+                    Snackbar.LENGTH_LONG).show();
             targetLanguage = selectedValue;
             handleOtherToolbarItems(R.id.translate);
             dialog.dismiss();
@@ -534,10 +546,12 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         if (isSummaryView) {
             String summaryText = entryInfo.getSummary();
 
-            String baseTitle = (autoTranslateOn && entryInfo.getTranslatedTitle() != null && !entryInfo.getTranslatedTitle().isEmpty())
-                    ? entryInfo.getTranslatedTitle()
+            String translatedTitle = entryInfo.getTranslatedTitle();
+
+            String baseTitle = (translatedTitle != null && !translatedTitle.isEmpty())
+                    ? translatedTitle
                     : entryInfo.getEntryTitle();
-            
+
             titleToDisplay = getString(R.string.summary_prefix) + ": " + baseTitle;
 
             String[] paragraphs = summaryText.split("\\n\\n");
@@ -1143,10 +1157,12 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 Log.e(TAG, "buildPlaybackState: Summary is empty");
                 return null;
             }
-            
-            String baseTitle = (isTranslatedView && entryInfo.getTranslatedTitle() != null && !entryInfo.getTranslatedTitle().isEmpty()) 
-                ? entryInfo.getTranslatedTitle() 
-                : entryInfo.getEntryTitle();
+
+            String translatedTitle = entryInfo.getTranslatedTitle();
+
+            String baseTitle = (translatedTitle != null && !translatedTitle.isEmpty())
+                    ? translatedTitle
+                    : entryInfo.getEntryTitle();
             String titleWithPrefix = getString(R.string.summary_prefix) + ": " + baseTitle;
             String processedSummary = summaryText.replace("\n\n", " --####-- ");
             state.textToRead = titleWithPrefix + " --####-- " + processedSummary;

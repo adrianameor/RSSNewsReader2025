@@ -63,11 +63,17 @@ public class TranslationWorker extends Worker {
         Map<Long, String> feedSourceLang = new HashMap<>();
 
         for (EntryInfo entry : entriesToProcess) {
+            // 🔥 CRITICAL: stop if language changed while worker is running
+            String currentLangCheck = sharedPreferencesRepository.getDefaultTranslationLanguage();
+            if (!defaultTargetLang.equals(currentLangCheck)) {
+                Log.w(TAG, "⚠️ Translation worker outdated. Stopping.");
+                return Result.success();
+            }
             try {
                 String originalTitle = entry.getEntryTitle();
                 if (originalTitle == null || originalTitle.isEmpty()) continue;
 
-                String targetLang = entry.getTargetTranslationLanguage() != null ? entry.getTargetTranslationLanguage() : defaultTargetLang;
+                String targetLang = defaultTargetLang;
 
                 if (!feedNeedsTranslation.containsKey(entry.getFeedId())) {
                     // 1. INTELLIGENT VERIFICATION: Use Title + Description for stronger detection
@@ -92,6 +98,15 @@ public class TranslationWorker extends Worker {
                     boolean needsTrans = !isSameLanguage(finalSourceLang, targetLang);
                     feedNeedsTranslation.put(entry.getFeedId(), needsTrans);
                     Log.d(TAG, "Feed " + entry.getFeedId() + " needs translation: " + needsTrans + " (source: " + finalSourceLang + ", target: " + targetLang + ")");
+                    if (isSameLanguage(finalSourceLang, targetLang)) {
+                        Log.d(TAG, "Skipping translation (same language) ID: " + entry.getEntryId());
+
+                        syncSameLanguageEntry(entry, originalTitle);
+
+                        entryRepository.updateTargetTranslationLanguage(targetLang, entry.getEntryId());
+
+                        continue;
+                    }
                 }
 
                 boolean needsTranslation = feedNeedsTranslation.get(entry.getFeedId());
@@ -110,18 +125,39 @@ public class TranslationWorker extends Worker {
                 String translatedTitle = entry.getTranslatedTitle();
                 if (translatedTitle == null || translatedTitle.trim().isEmpty()) {
                     translatedTitle = translationRepository.translateText(originalTitle, finalSourceLang, targetLang).blockingGet();
-                    entryRepository.updateTranslatedTitle(translatedTitle, entry.getEntryId());
                 }
+
+// 🔥 ADD THIS BLOCK HERE (VERY IMPORTANT)
+                String latestLangCheck = sharedPreferencesRepository.getDefaultTranslationLanguage();
+                if (!targetLang.equals(latestLangCheck)) {
+                    Log.w(TAG, "⚠️ Skipping translation write (outdated) ID: " + entry.getEntryId());
+                    continue;
+                }
+
+                // NOW SAFE TO WRITE
+                entryRepository.updateTranslatedTitle(translatedTitle, entry.getEntryId());
 
                 // Translate Full Article HTML
                 String cleanedHtml = entryRepository.getHtmlById(entry.getEntryId());
                 if (cleanedHtml != null && !cleanedHtml.isEmpty()) {
+
                     String translatedHtml = translationRepository.translateText(cleanedHtml, finalSourceLang, targetLang).blockingGet();
+
+                    // 🔥 ADD AGAIN BEFORE WRITING HTML
+                    String latestLangCheck2 = sharedPreferencesRepository.getDefaultTranslationLanguage();
+                    if (!targetLang.equals(latestLangCheck2)) {
+                        Log.w(TAG, "⚠️ Skipping HTML write (outdated) ID: " + entry.getEntryId());
+                        continue;
+                    }
+
                     entryRepository.updateHtml(translatedHtml, entry.getEntryId());
 
                     String plainTextWithMarkers = textUtil.extractHtmlContent(translatedHtml, "--####--");
                     entryRepository.updateTranslated(translatedTitle + "--####--" + plainTextWithMarkers, entry.getEntryId());
                 }
+
+                // Final mark
+                entryRepository.updateTargetTranslationLanguage(targetLang, entry.getEntryId());
 
             } catch (Exception e) {
                 Log.e(TAG, "WORKER: Error processing ID " + entry.getEntryId(), e);

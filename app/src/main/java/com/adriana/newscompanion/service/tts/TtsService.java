@@ -1,7 +1,12 @@
 package com.adriana.newscompanion.service.tts;
 
 import android.app.Notification;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
+import android.media.AudioFocusRequest;
+import android.media.AudioManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
@@ -10,6 +15,7 @@ import android.support.v4.media.MediaMetadataCompat;
 import android.support.v4.media.session.MediaSessionCompat;
 import android.support.v4.media.session.PlaybackStateCompat;
 import android.util.Log;
+import android.view.KeyEvent;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -50,6 +56,10 @@ public class TtsService extends MediaBrowserServiceCompat {
     EntryRepository entryRepository;
     @Inject
     TtsExtractor ttsExtractor;
+    private AudioManager audioManager;
+    private AudioFocusRequest audioFocusRequest;
+    private boolean isAudioFocusGranted = false;
+    private boolean shouldResumeAfterFocusGain = false;
     private TtsNotification ttsNotification;
     private static MediaSessionCompat mediaSession;
     private MediaMetadataCompat preparedData;
@@ -73,9 +83,67 @@ public class TtsService extends MediaBrowserServiceCompat {
     @Override
     public void onCreate() {
         super.onCreate();
+        registerReceiver(noisyReceiver, new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY));
         Log.d(TAG, "created");
         ttsPlayer.initTts(TtsService.this, new TtsPlayerListener(), callback);
+
+        audioFocusChangeListener = focusChange -> {
+            Log.d(TAG, "🎧 Audio focus change: " + focusChange);
+
+            switch (focusChange) {
+
+                case AudioManager.AUDIOFOCUS_GAIN:
+                    isAudioFocusGranted = true;
+
+                    if (shouldResumeAfterFocusGain) {
+                        Log.d(TAG, "▶️ Regaining focus → resume playback");
+                        if (mediaSession != null) {
+                            mediaSession.getController().getTransportControls().play();
+                        }
+                        shouldResumeAfterFocusGain = false;
+                    }
+
+                    if (ttsPlayer != null) {
+                        ttsPlayer.setVolumeNormal();
+                    }
+                    break;
+
+                case AudioManager.AUDIOFOCUS_LOSS:
+                    isAudioFocusGranted = false;
+                    shouldResumeAfterFocusGain = false;
+
+                    if (mediaSession != null) {
+                        mediaSession.getController().getTransportControls().stop();
+                    }
+                    break;
+
+                case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
+                    shouldResumeAfterFocusGain = true;
+
+                    if (mediaSession != null) {
+                        mediaSession.getController().getTransportControls().pause();
+                    }
+                    break;
+
+                case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
+                    if (ttsPlayer != null) {
+                        ttsPlayer.setVolumeDuck();
+                    }
+                    break;
+            }
+        };
+
         ttsNotification = new TtsNotification(this);
+
+        audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setOnAudioFocusChangeListener(audioFocusChangeListener)
+                    .setAcceptsDelayedFocusGain(true)
+                    .setWillPauseWhenDucked(false)
+                    .build();
+        }
 
         mediaSession = new MediaSessionCompat(this, TAG);
         Log.e("MEDIA_TRACE", "🎯 MediaSession CREATED");
@@ -107,9 +175,47 @@ public class TtsService extends MediaBrowserServiceCompat {
         setSessionToken(mediaSession.getSessionToken());
     }
 
+    private AudioManager.OnAudioFocusChangeListener audioFocusChangeListener;
+
+    private boolean requestAudioFocus() {
+        int result;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            result = audioManager.requestAudioFocus(audioFocusRequest);
+        } else {
+            result = audioManager.requestAudioFocus(
+                    audioFocusChangeListener,
+                    AudioManager.STREAM_MUSIC,
+                    AudioManager.AUDIOFOCUS_GAIN
+            );
+        }
+
+        isAudioFocusGranted = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+        return isAudioFocusGranted;
+    }
+
+    private void abandonAudioFocus() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            audioManager.abandonAudioFocusRequest(audioFocusRequest);
+        } else {
+            audioManager.abandonAudioFocus(audioFocusChangeListener);
+        }
+        isAudioFocusGranted = false;
+    }
+
+    private final BroadcastReceiver noisyReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (AudioManager.ACTION_AUDIO_BECOMING_NOISY.equals(intent.getAction())) {
+                Log.d(TAG, "🔊 Headphones disconnected → pause");
+                callback.onPause();
+            }
+        }
+    };
+
     @Override
     public void onDestroy() {
-        Log.d(TAG, "destroyed");
+        unregisterReceiver(noisyReceiver);
         disposables.clear();
         ttsPlayer.stop();
         mediaSession.release();
@@ -266,32 +372,31 @@ public class TtsService extends MediaBrowserServiceCompat {
 
         @Override
         public void onPlay() {
-            Log.e("MEDIA_TRACE", "🔥 CALLBACK: onPlay()");
-            Log.d(TAG, "▶️ onPlay called (MediaSession callback)");
-            
-            // Reuse cached PlaybackStateModel - NO database queries
-            if (lastPlaybackStateModel == null) {
-                Log.e(TAG, "❌ onPlay failed: no cached PlaybackStateModel");
-                Log.e(TAG, "   UI must call playFromMediaId first to initialize state");
+
+            if (!requestAudioFocus()) {
+                Log.w(TAG, "❌ Audio focus denied");
                 return;
             }
-            
-            Log.d(TAG, "✅ Reusing cached PlaybackStateModel for resume");
-            
-            // Re-package and call onPlayFromMediaId with cached state
-            Bundle extras = new Bundle();
-            extras.putParcelable("playback_state", lastPlaybackStateModel);
-            
-            onPlayFromMediaId(
-                String.valueOf(lastPlaybackStateModel.currentEntryId),
-                extras
-            );
+
+            if (lastPlaybackStateModel == null) {
+                Log.e(TAG, "❌ No cached state, cannot resume");
+                return;
+            }
+
+            Log.d(TAG, "▶️ Resuming playback");
+
+            if (ttsPlayer != null) {
+                ttsPlayer.setPausedManually(false);
+                ttsPlayer.speakNextSentence();
+            }
+
+            updatePlaybackState(PlaybackStateCompat.STATE_PLAYING);
         }
 
 
         @Override
         public void onPause() {
-            Log.d(TAG, "onPause called");
+            abandonAudioFocus();
             if (ttsPlayer != null) {
                 ttsPlayer.setPausedManually(true);
                 ttsPlayer.pauseTts();
@@ -303,7 +408,7 @@ public class TtsService extends MediaBrowserServiceCompat {
 
         @Override
         public void onStop() {
-            Log.d(TAG, "onStop called");
+            abandonAudioFocus();
 
             if (ttsPlayer != null) {
                 ttsPlayer.stop();
@@ -399,12 +504,6 @@ public class TtsService extends MediaBrowserServiceCompat {
                 default:
                     Log.w(TAG, "Unhandled custom action: " + action);
             }
-        }
-
-        @Override
-        public boolean onMediaButtonEvent(Intent mediaButtonIntent) {
-            Log.d("MediaSession", "Media button event received: " + mediaButtonIntent);
-            return super.onMediaButtonEvent(mediaButtonIntent);
         }
 
         private void updatePlaybackState(int state) {

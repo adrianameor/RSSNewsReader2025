@@ -7,6 +7,8 @@ import androidx.work.OneTimeWorkRequest;
 import androidx.work.WorkManager;
 
 import com.adriana.newscompanion.worker.AiCleaningWorker;
+import com.adriana.newscompanion.worker.AiSummarizationWorker;
+import com.adriana.newscompanion.worker.TranslationWorker;
 
 /**
  * Utility class to manually trigger AI cleaning from anywhere in the app
@@ -29,5 +31,19 @@ public class AiCleaningTrigger {
         OneTimeWorkRequest aiCleaningWorkRequest = new OneTimeWorkRequest.Builder(AiCleaningWorker.class).build();
         workManager.enqueue(aiCleaningWorkRequest);
         Log.d(TAG, "AI Cleaning Worker enqueued successfully.");
+    }
+
+    public static void triggerFullReprocess(Context context) {
+        WorkManager wm = WorkManager.getInstance(context);
+
+        OneTimeWorkRequest translation =
+                new OneTimeWorkRequest.Builder(TranslationWorker.class).build();
+
+        OneTimeWorkRequest summary =
+                new OneTimeWorkRequest.Builder(AiSummarizationWorker.class).build();
+
+        wm.beginWith(translation)
+                .then(summary)
+                .enqueue();
     }
 }

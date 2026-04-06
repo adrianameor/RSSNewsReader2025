@@ -704,6 +704,24 @@ public class TtsPlayer extends PlayerAdapter implements TtsPlayerListener {
         }
     }
 
+    public void setVolumeDuck() {
+        if (tts != null) {
+            tts.setSpeechRate(0.8f); // simulate ducking
+        }
+        if (mediaPlayer != null) {
+            mediaPlayer.setVolume(0.2f, 0.2f);
+        }
+    }
+
+    public void setVolumeNormal() {
+        if (tts != null) {
+            tts.setSpeechRate(1.0f);
+        }
+        if (mediaPlayer != null) {
+            changeMediaPlayerVolume();
+        }
+    }
+
     @PlaybackStateCompat.Actions
     private long getAvailableActions() {
         long actions = PlaybackStateCompat.ACTION_SKIP_TO_NEXT

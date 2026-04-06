@@ -470,4 +470,14 @@ public class EntryRepository {
     public Entry getFirstEntryByFeedId(long feedId) {
         return entryDao.getFirstEntryByFeedId(feedId);
     }
+
+    public void invalidateAllAiContentSync() {
+        entryDao.invalidateAllAiContent();
+    }
+
+    public void updateTargetTranslationLanguage(String lang, long entryId) {
+        Schedulers.io().scheduleDirect(() -> {
+            entryDao.updateTargetTranslationLanguage(lang, entryId);
+        });
+    }
 }

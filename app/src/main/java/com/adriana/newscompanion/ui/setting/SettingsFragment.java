@@ -4,6 +4,8 @@ import static android.app.Activity.RESULT_OK;
 
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.media.AudioFocusRequest;
+import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
@@ -18,13 +20,19 @@ import androidx.appcompat.app.AppCompatDelegate;
 import androidx.preference.ListPreference;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceFragmentCompat;
+import androidx.work.ExistingWorkPolicy;
+import androidx.work.OneTimeWorkRequest;
+import androidx.work.WorkManager;
 
 import com.adriana.newscompanion.R;
+import com.adriana.newscompanion.data.entry.EntryRepository;
 import com.adriana.newscompanion.data.sharedpreferences.SharedPreferencesRepository;
 import com.adriana.newscompanion.service.rss.RssWorkManager;
 import com.adriana.newscompanion.service.tts.TtsPlayer;
 import com.adriana.newscompanion.ui.main.MainActivity;
 import com.adriana.newscompanion.util.AiCleaningTrigger;
+import com.adriana.newscompanion.worker.AiSummarizationWorker;
+import com.adriana.newscompanion.worker.TranslationWorker;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -48,6 +56,9 @@ public class SettingsFragment extends PreferenceFragmentCompat {
 
     @Inject
     SharedPreferencesRepository sharedPreferencesRepository;
+
+    @Inject
+    EntryRepository entryRepository;
 
     private ListPreference backgroundMusicFilePreference;
     private boolean isAdditionalImport;
@@ -126,6 +137,49 @@ public class SettingsFragment extends PreferenceFragmentCompat {
                     break;
                 case "backgroundMusicVolume":
                     ttsPlayer.changeMediaPlayerVolume();
+                    break;
+                case "defaultTranslationLanguage":
+
+                    String newLang = sharedPreferencesRepository.getDefaultTranslationLanguage();
+
+                    Log.d("SettingsFragment", "Language changed → " + newLang);
+
+                    WorkManager wm = WorkManager.getInstance(requireContext());
+
+                    // 1. Cancel EVERYTHING
+                    wm.cancelAllWork();
+
+                    // 2. Force DB reset synchronously
+                    new Thread(() -> {
+                        entryRepository.invalidateAllAiContentSync();
+
+                        requireActivity().runOnUiThread(() -> {
+
+                            // 3. 🔥 FORCE NEW UNIQUE WORK (NOT relying on RSS)
+                            OneTimeWorkRequest translation =
+                                    new OneTimeWorkRequest.Builder(TranslationWorker.class).build();
+
+                            OneTimeWorkRequest summary =
+                                    new OneTimeWorkRequest.Builder(AiSummarizationWorker.class).build();
+
+                            wm.beginUniqueWork(
+                                    "FORCED_AI_PIPELINE",
+                                    ExistingWorkPolicy.REPLACE,
+                                    translation
+                            ).then(summary).enqueue();
+
+                            Log.d("SettingsFragment", "🔥 Forced AI pipeline restart");
+
+                            Toast.makeText(requireContext(),
+                                    "Language changed. Reprocessing articles...",
+                                    Toast.LENGTH_LONG).show();
+                        });
+                    }).start();
+
+                    Toast.makeText(requireContext(),
+                            "Language changed. Reprocessing articles...",
+                            Toast.LENGTH_LONG).show();
+
                     break;
             }
         }

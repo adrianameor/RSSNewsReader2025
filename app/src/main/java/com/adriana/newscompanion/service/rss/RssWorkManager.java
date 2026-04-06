@@ -5,6 +5,7 @@ import android.util.Log;
 
 import androidx.work.Constraints;
 import androidx.work.ExistingPeriodicWorkPolicy;
+import androidx.work.ExistingWorkPolicy;
 import androidx.work.NetworkType;
 import androidx.work.OneTimeWorkRequest;
 import androidx.work.PeriodicWorkRequest;
@@ -53,7 +54,11 @@ public class RssWorkManager {
                 .build();
 
         Log.d(TAG, "Enqueuing IMMEDIATE one-time RssWorker.");
-        workManager.enqueue(immediateWorkRequest);
+        workManager.enqueueUniqueWork(
+                "RSS_ONE_TIME_WORK",
+                ExistingWorkPolicy.REPLACE,
+                immediateWorkRequest
+        );
 
 
         // --- PERIODIC WORK ---
@@ -73,7 +78,7 @@ public class RssWorkManager {
         // This is safer and simpler than manually checking if work is scheduled.
         workManager.enqueueUniquePeriodicWork(
                 UNIQUE_PERIODIC_WORK_NAME,
-                ExistingPeriodicWorkPolicy.KEEP, // KEEP ensures it's not rescheduled if one already exists with the same parameters
+                ExistingPeriodicWorkPolicy.REPLACE,
                 periodicWorkRequest
         );
         Log.d(TAG, "Ensured PERIODIC RssWorker is scheduled with interval: " + finalInterval + " minutes.");

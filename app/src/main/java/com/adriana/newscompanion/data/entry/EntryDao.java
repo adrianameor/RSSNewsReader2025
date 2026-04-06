@@ -290,4 +290,10 @@ public interface EntryDao {
 
     @Query("UPDATE entry_table SET content = NULL WHERE content IS NOT NULL")
     void clearAllContent();
+
+    @Query("UPDATE entry_table SET translated = NULL, translated_title = NULL, translated_summary = NULL, summary = NULL, isAiSummarized = 0, isAiSummaryTranslated = 0, target_translation_language = NULL")
+    void invalidateAllAiContent();
+
+    @Query("UPDATE entry_table SET target_translation_language = :lang WHERE id = :id")
+    void updateTargetTranslationLanguage(String lang, long id);
 }

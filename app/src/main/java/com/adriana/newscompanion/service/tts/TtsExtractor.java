@@ -296,9 +296,9 @@ public class TtsExtractor {
     }
 
     private void triggerAiPipelineChain() {
-        if (!sharedPreferencesRepository.isSummarizationEnabled() && 
-            !sharedPreferencesRepository.isAiCleaningEnabled() && 
-            !sharedPreferencesRepository.getAutoTranslate()) {
+        if (!sharedPreferencesRepository.isSummarizationEnabled() &&
+                !sharedPreferencesRepository.isAiCleaningEnabled() &&
+                !sharedPreferencesRepository.getAutoTranslate()) {
             return;
         }
 
@@ -306,27 +306,53 @@ public class TtsExtractor {
         String uniqueWorkName = "AI_CONTENT_PIPELINE";
         WorkContinuation continuation = null;
 
-        // FIX: Using REPLACE policy ensures the pipeline restarts with current pending items
-        if (sharedPreferencesRepository.isSummarizationEnabled()) {
-            OneTimeWorkRequest task = new OneTimeWorkRequest.Builder(AiSummarizationWorker.class).build();
-            continuation = workManager.beginUniqueWork(uniqueWorkName, ExistingWorkPolicy.REPLACE, task);
-        }
-
-        if (sharedPreferencesRepository.isAiCleaningEnabled()) {
-            OneTimeWorkRequest task = new OneTimeWorkRequest.Builder(AiCleaningWorker.class).build();
-            if (continuation == null) continuation = workManager.beginUniqueWork(uniqueWorkName, ExistingWorkPolicy.REPLACE, task);
-            else continuation = continuation.then(task);
-        }
-
+        // ✅ STEP 1: TRANSLATION FIRST (if enabled)
         if (sharedPreferencesRepository.getAutoTranslate()) {
-            OneTimeWorkRequest task = new OneTimeWorkRequest.Builder(TranslationWorker.class).build();
-            if (continuation == null) continuation = workManager.beginUniqueWork(uniqueWorkName, ExistingWorkPolicy.REPLACE, task);
-            else continuation = continuation.then(task);
+            OneTimeWorkRequest task =
+                    new OneTimeWorkRequest.Builder(TranslationWorker.class).build();
+
+            continuation = workManager.beginUniqueWork(
+                    uniqueWorkName,
+                    ExistingWorkPolicy.REPLACE,
+                    task
+            );
+        }
+
+        // ✅ STEP 2: SUMMARY AFTER TRANSLATION
+        if (sharedPreferencesRepository.isSummarizationEnabled()) {
+            OneTimeWorkRequest task =
+                    new OneTimeWorkRequest.Builder(AiSummarizationWorker.class).build();
+
+            if (continuation == null) {
+                continuation = workManager.beginUniqueWork(
+                        uniqueWorkName,
+                        ExistingWorkPolicy.REPLACE,
+                        task
+                );
+            } else {
+                continuation = continuation.then(task);
+            }
+        }
+
+        // ✅ STEP 3: CLEANING LAST (optional)
+        if (sharedPreferencesRepository.isAiCleaningEnabled()) {
+            OneTimeWorkRequest task =
+                    new OneTimeWorkRequest.Builder(AiCleaningWorker.class).build();
+
+            if (continuation == null) {
+                continuation = workManager.beginUniqueWork(
+                        uniqueWorkName,
+                        ExistingWorkPolicy.REPLACE,
+                        task
+                );
+            } else {
+                continuation = continuation.then(task);
+            }
         }
 
         if (continuation != null) {
             continuation.enqueue();
-            Log.d(TAG, "AI Pipeline chain enqueued (REPLACE policy).");
+            Log.d(TAG, "🔥 AI Pipeline chain enqueued (FIXED ORDER).");
         }
     }
 

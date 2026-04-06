@@ -121,13 +121,19 @@ public class SharedPreferencesRepository {
     }
 
     public String getDefaultTranslationLanguage() {
-        return sharedPreferences.getString("defaultTranslationLanguage", "zh");
+        return sharedPreferences.getString("defaultTranslationLanguage", "en");
     }
-
-
 
     public void setDefaultTranslationLanguage(String language) {
         getEditor().putString("defaultTranslationLanguage", language).commit();
+    }
+
+    public void setDefaultTranslationLanguageReactive(String newLang) {
+        String oldLang = getDefaultTranslationLanguage();
+
+        if (!oldLang.equals(newLang)) {
+            getEditor().putString("defaultTranslationLanguage", newLang).commit();
+        }
     }
 
     public String getTranslationMethod() {

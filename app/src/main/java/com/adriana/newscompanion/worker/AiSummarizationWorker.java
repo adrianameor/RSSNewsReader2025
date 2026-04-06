@@ -65,6 +65,12 @@ public class AiSummarizationWorker extends Worker {
             Log.d(TAG, "Found " + unsummarized.size() + " articles to summarize.");
 
             for (Entry entry : unsummarized) {
+                // 🔥 CRITICAL: stop if language changed while worker is running
+                String currentLangCheck = sharedPreferencesRepository.getDefaultTranslationLanguage();
+                if (!targetLang.equals(currentLangCheck)) {
+                    Log.w(TAG, "⚠️ Summarization worker outdated. Stopping.");
+                    return Result.success();
+                }
                 try {
                     String html = entry.getOriginalHtml();
                     if (html == null || html.isEmpty()) {
@@ -79,21 +85,35 @@ public class AiSummarizationWorker extends Worker {
                     Log.d(TAG, "Summarizing ID: " + entry.getId() + (autoTranslate ? " (Direct to " + targetLang + ")" : ""));
 
                     // 1. Generate the summary (translated or original)
-                    String summary = translationRepository.summarizeText(plainText, length, autoTranslate ? targetLang : null).blockingGet();
+                    String summary = translationRepository.summarizeText(plainText, length, targetLang).blockingGet();
 
                     if (summary != null && !summary.isEmpty()) {
+                        // 🔥 CRITICAL: re-check before writing (prevents late writes)
+                        String latestLangCheck = sharedPreferencesRepository.getDefaultTranslationLanguage();
+                        if (!targetLang.equals(latestLangCheck)) {
+                            Log.w(TAG, "⚠️ Skipping write (outdated result) ID: " + entry.getId());
+                            continue;
+                        }
                         feedRepository.getEntryRepository().updateSummary(summary, entry.getId());
+
+                        feedRepository.getEntryRepository()
+                                .updateTargetTranslationLanguage(targetLang, entry.getId());
                         
                         // 2. NEW: If Auto-Translate is ON, also translate the TITLE immediately
                         if (autoTranslate) {
+                            // ALWAYS translate title to match summary language
                             Feed feed = feedRepository.getFeedById(entry.getFeedId());
                             String sourceLang = (feed != null) ? feed.getLanguage() : "en";
-                            
-                            Log.d(TAG, "Translating title for Summary page | ID: " + entry.getId());
-                            String translatedTitle = translationRepository.translateText(entry.getTitle(), sourceLang, targetLang).blockingGet();
-                            
+
+                            Log.d(TAG, "Translating title | ID: " + entry.getId());
+
+                            String translatedTitle = translationRepository
+                                    .translateText(entry.getTitle(), sourceLang, targetLang)
+                                    .blockingGet();
+
                             if (translatedTitle != null && !translatedTitle.isEmpty()) {
-                                feedRepository.getEntryRepository().updateTranslatedTitle(translatedTitle, entry.getId());
+                                feedRepository.getEntryRepository()
+                                        .updateTranslatedTitle(translatedTitle, entry.getId());
                             }
                         }
 
