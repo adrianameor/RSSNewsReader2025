@@ -296,4 +296,15 @@ public interface EntryDao {
 
     @Query("UPDATE entry_table SET target_translation_language = :lang WHERE id = :id")
     void updateTargetTranslationLanguage(String lang, long id);
+
+    @Query(
+            "SELECT * FROM entry_table " +
+                    "WHERE content IS NULL " +
+                    "ORDER BY " +
+                    "CASE WHEN id = :currentId THEN 0 ELSE 1 END, " +
+                    "CASE WHEN :sortBy = 'latest' THEN publishedDate END DESC, " +
+                    "CASE WHEN :sortBy = 'oldest' THEN publishedDate END ASC " +
+                    "LIMIT 1"
+    )
+    Entry getNextEntryPrioritized(long currentId, String sortBy);
 }

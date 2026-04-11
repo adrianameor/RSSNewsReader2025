@@ -122,7 +122,6 @@ public class TtsExtractor {
     }
 
     private void extractWithHttp(Entry entry) {
-        // Start watchdog for HTTP extraction (30 seconds timeout)
         startWatchdog(30000);
 
         new Thread(() -> {
@@ -187,7 +186,6 @@ public class TtsExtractor {
                         }
                         failedIds.add(currentIdInProgress);
                     } else {
-                        // CRITICAL FIX: Prepend title to content for TTS
                         String contentWithTitle = currentTitle + delimiter + finalFullText;
 
                         entryRepository.updateHtml(doc.html(), currentIdInProgress);
@@ -195,7 +193,7 @@ public class TtsExtractor {
                             entryRepository.updateOriginalHtml(doc.html(), currentIdInProgress);
                             entryRepository.updateContent(contentWithTitle, currentIdInProgress);
                         }
-                        Log.d(TAG, "✓ HTTP SUCCESS: ID " + currentIdInProgress + " finished with title prepended.");
+                        triggerAiPipelineChain();
                     }
                 } else {
                     failedIds.add(currentIdInProgress);
@@ -306,35 +304,19 @@ public class TtsExtractor {
         String uniqueWorkName = "AI_CONTENT_PIPELINE";
         WorkContinuation continuation = null;
 
-        // ✅ STEP 1: TRANSLATION FIRST (if enabled)
-        if (sharedPreferencesRepository.getAutoTranslate()) {
-            OneTimeWorkRequest task =
-                    new OneTimeWorkRequest.Builder(TranslationWorker.class).build();
-
-            continuation = workManager.beginUniqueWork(
-                    uniqueWorkName,
-                    ExistingWorkPolicy.REPLACE,
-                    task
-            );
-        }
-
-        // ✅ STEP 2: SUMMARY AFTER TRANSLATION
+        // ✅ STEP 1: SUMMARIZATION FIRST
         if (sharedPreferencesRepository.isSummarizationEnabled()) {
             OneTimeWorkRequest task =
                     new OneTimeWorkRequest.Builder(AiSummarizationWorker.class).build();
 
-            if (continuation == null) {
-                continuation = workManager.beginUniqueWork(
-                        uniqueWorkName,
-                        ExistingWorkPolicy.REPLACE,
-                        task
-                );
-            } else {
-                continuation = continuation.then(task);
-            }
+            continuation = workManager.beginUniqueWork(
+                    uniqueWorkName,
+                    ExistingWorkPolicy.KEEP,
+                    task
+            );
         }
 
-        // ✅ STEP 3: CLEANING LAST (optional)
+        // ✅ STEP 2: CLEANING
         if (sharedPreferencesRepository.isAiCleaningEnabled()) {
             OneTimeWorkRequest task =
                     new OneTimeWorkRequest.Builder(AiCleaningWorker.class).build();
@@ -342,7 +324,23 @@ public class TtsExtractor {
             if (continuation == null) {
                 continuation = workManager.beginUniqueWork(
                         uniqueWorkName,
-                        ExistingWorkPolicy.REPLACE,
+                        ExistingWorkPolicy.KEEP,
+                        task
+                );
+            } else {
+                continuation = continuation.then(task);
+            }
+        }
+
+        // ✅ STEP 3: TRANSLATION LAST
+        if (sharedPreferencesRepository.getAutoTranslate()) {
+            OneTimeWorkRequest task =
+                    new OneTimeWorkRequest.Builder(TranslationWorker.class).build();
+
+            if (continuation == null) {
+                continuation = workManager.beginUniqueWork(
+                        uniqueWorkName,
+                        ExistingWorkPolicy.KEEP,
                         task
                 );
             } else {
@@ -352,17 +350,9 @@ public class TtsExtractor {
 
         if (continuation != null) {
             continuation.enqueue();
-            Log.d(TAG, "🔥 AI Pipeline chain enqueued (FIXED ORDER).");
         }
     }
 
-    /**
-     * Ensures that the specified feed has a language detected and saved.
-     * This method is synchronous and thread-safe, detecting language only once per feed.
-     * 
-     * @param feedId The ID of the feed to check/detect language for
-     * @return The detected or existing language code for the feed
-     */
     public synchronized String ensureFeedLanguageDetected(long feedId) {
         try {
             com.adriana.newscompanion.data.feed.Feed feed = feedRepository.getFeedById(feedId);
@@ -489,7 +479,6 @@ public class TtsExtractor {
                                     if (finalFullText.length() < 200 || finalFullText.toLowerCase().contains("please enable javascript")) {
                                         failedIds.add(currentIdInProgress);
                                     } else {
-                                        // CRITICAL FIX: Prepend title to content for TTS
                                         String contentWithTitle = currentTitle + delimiter + finalFullText;
 
                                         entryRepository.updateHtml(doc.html(), currentIdInProgress);
@@ -497,7 +486,7 @@ public class TtsExtractor {
                                             entryRepository.updateOriginalHtml(doc.html(), currentIdInProgress);
                                             entryRepository.updateContent(contentWithTitle, currentIdInProgress);
                                         }
-                                        Log.d(TAG, "✓ SUCCESS: ID " + currentIdInProgress + " finished with title prepended.");
+                                        triggerAiPipelineChain();
                                     }
                                 }
                             }

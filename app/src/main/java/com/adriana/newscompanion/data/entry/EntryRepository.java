@@ -91,7 +91,10 @@ public class EntryRepository {
     }
 
     public Entry getEmptyContentEntry() {
-        Entry entry = entryDao.getEmptyEntryOrderByPrior();
+        long currentId = sharedPreferencesRepository.getCurrentReadingEntryId();
+        String sortBy = sharedPreferencesRepository.getSortBy();
+
+        Entry entry = entryDao.getNextEntryPrioritized(currentId, sortBy);
 
         if (entry == null) {
             entry = entryDao.getEmptyEntry();
