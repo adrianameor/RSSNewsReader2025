@@ -2,15 +2,14 @@ package com.adriana.newscompanion.service.tts;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
-import android.graphics.Bitmap;
+
 import java.net.HttpURLConnection;
-import android.net.Uri;
+
 import android.os.Handler;
 import android.os.Looper;
 import android.util.JsonReader;
 import android.util.JsonToken;
 import android.util.Log;
-import android.webkit.ValueCallback;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
@@ -18,25 +17,15 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 
 import androidx.core.content.ContextCompat;
-import androidx.work.ExistingWorkPolicy;
-import androidx.work.OneTimeWorkRequest;
-import androidx.work.WorkContinuation;
-import androidx.work.WorkManager;
 
-import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
-import io.reactivex.rxjava3.core.Flowable;
-import io.reactivex.rxjava3.core.Single;
-import io.reactivex.rxjava3.schedulers.Schedulers;
 import com.adriana.newscompanion.data.entry.Entry;
 import com.adriana.newscompanion.data.entry.EntryRepository;
 import com.adriana.newscompanion.data.feed.FeedRepository;
 import com.adriana.newscompanion.data.playlist.PlaylistRepository;
+import com.adriana.newscompanion.data.repository.TranslationRepository;
 import com.adriana.newscompanion.data.sharedpreferences.SharedPreferencesRepository;
 import com.adriana.newscompanion.service.util.TextUtil;
 import com.adriana.newscompanion.ui.webview.WebViewListener;
-import com.adriana.newscompanion.worker.AiCleaningWorker;
-import com.adriana.newscompanion.worker.AiSummarizationWorker;
-import com.adriana.newscompanion.worker.TranslationWorker;
 
 import net.dankito.readability4j.Article;
 import net.dankito.readability4j.extended.Readability4JExtended;
@@ -58,7 +47,6 @@ import javax.inject.Singleton;
 
 import dagger.hilt.android.qualifiers.ApplicationContext;
 import io.reactivex.rxjava3.disposables.CompositeDisposable;
-import io.reactivex.rxjava3.disposables.Disposable;
 
 @Singleton
 public class TtsExtractor {
@@ -90,12 +78,14 @@ public class TtsExtractor {
     private final HashSet<Long> feedsRequiringWebView = new HashSet<>();
 
     private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
+    private final TranslationRepository translationRepository;
     private Runnable watchdogRunnable;
     private int loadCounter = 0;
+    private final Object aiLock = new Object();
 
     @SuppressLint("SetJavaScriptEnabled")
     @Inject
-    public TtsExtractor(@ApplicationContext Context context, TtsPlaylist ttsPlaylist, EntryRepository entryRepository, FeedRepository feedRepository, PlaylistRepository playlistRepository, TextUtil textUtil, SharedPreferencesRepository sharedPreferencesRepository) {
+    public TtsExtractor(@ApplicationContext Context context, TtsPlaylist ttsPlaylist, EntryRepository entryRepository, FeedRepository feedRepository, PlaylistRepository playlistRepository, TextUtil textUtil, SharedPreferencesRepository sharedPreferencesRepository, TranslationRepository translationRepository) {
         this.context = context;
         this.ttsPlaylist = ttsPlaylist;
         this.entryRepository = entryRepository;
@@ -103,6 +93,7 @@ public class TtsExtractor {
         this.playlistRepository = playlistRepository;
         this.textUtil = textUtil;
         this.sharedPreferencesRepository = sharedPreferencesRepository;
+        this.translationRepository = translationRepository;
 
         initWebView();
     }
@@ -189,11 +180,11 @@ public class TtsExtractor {
                         String contentWithTitle = currentTitle + delimiter + finalFullText;
 
                         entryRepository.updateHtml(doc.html(), currentIdInProgress);
-                        if (entryRepository.getOriginalHtmlById(currentIdInProgress) == null) {
-                            entryRepository.updateOriginalHtml(doc.html(), currentIdInProgress);
-                            entryRepository.updateContent(contentWithTitle, currentIdInProgress);
-                        }
-                        triggerAiPipelineChain();
+                        entryRepository.updateOriginalHtml(doc.html(), currentIdInProgress);
+                        entryRepository.updateContent(contentWithTitle, currentIdInProgress);
+                        Log.e("PIPELINE_TRACE", "✅ CONTENT SAVED ID = " + currentIdInProgress);
+                        Log.e("PIPELINE_TRACE", "🔥 trigger AI for ID = " + currentIdInProgress);
+                        runSummarizationNow();
                     }
                 } else {
                     failedIds.add(currentIdInProgress);
@@ -264,7 +255,8 @@ public class TtsExtractor {
             }
         } else {
             Log.d(TAG, "No more articles in queue.");
-            triggerAiPipelineChain();
+            Log.e("PIPELINE_TRACE", "🔥 trigger AI for ID = " + currentIdInProgress);
+            runSummarizationNow();
         }
     }
 
@@ -291,66 +283,6 @@ public class TtsExtractor {
         currentIdInProgress = -1;
         extractionInProgress = false;
         new Handler(Looper.getMainLooper()).post(this::extractAllEntries);
-    }
-
-    private void triggerAiPipelineChain() {
-        if (!sharedPreferencesRepository.isSummarizationEnabled() &&
-                !sharedPreferencesRepository.isAiCleaningEnabled() &&
-                !sharedPreferencesRepository.getAutoTranslate()) {
-            return;
-        }
-
-        WorkManager workManager = WorkManager.getInstance(context);
-        String uniqueWorkName = "AI_CONTENT_PIPELINE";
-        WorkContinuation continuation = null;
-
-        // ✅ STEP 1: SUMMARIZATION FIRST
-        if (sharedPreferencesRepository.isSummarizationEnabled()) {
-            OneTimeWorkRequest task =
-                    new OneTimeWorkRequest.Builder(AiSummarizationWorker.class).build();
-
-            continuation = workManager.beginUniqueWork(
-                    uniqueWorkName,
-                    ExistingWorkPolicy.KEEP,
-                    task
-            );
-        }
-
-        // ✅ STEP 2: CLEANING
-        if (sharedPreferencesRepository.isAiCleaningEnabled()) {
-            OneTimeWorkRequest task =
-                    new OneTimeWorkRequest.Builder(AiCleaningWorker.class).build();
-
-            if (continuation == null) {
-                continuation = workManager.beginUniqueWork(
-                        uniqueWorkName,
-                        ExistingWorkPolicy.KEEP,
-                        task
-                );
-            } else {
-                continuation = continuation.then(task);
-            }
-        }
-
-        // ✅ STEP 3: TRANSLATION LAST
-        if (sharedPreferencesRepository.getAutoTranslate()) {
-            OneTimeWorkRequest task =
-                    new OneTimeWorkRequest.Builder(TranslationWorker.class).build();
-
-            if (continuation == null) {
-                continuation = workManager.beginUniqueWork(
-                        uniqueWorkName,
-                        ExistingWorkPolicy.KEEP,
-                        task
-                );
-            } else {
-                continuation = continuation.then(task);
-            }
-        }
-
-        if (continuation != null) {
-            continuation.enqueue();
-        }
     }
 
     public synchronized String ensureFeedLanguageDetected(long feedId) {
@@ -482,11 +414,11 @@ public class TtsExtractor {
                                         String contentWithTitle = currentTitle + delimiter + finalFullText;
 
                                         entryRepository.updateHtml(doc.html(), currentIdInProgress);
-                                        if (entryRepository.getOriginalHtmlById(currentIdInProgress) == null) {
-                                            entryRepository.updateOriginalHtml(doc.html(), currentIdInProgress);
-                                            entryRepository.updateContent(contentWithTitle, currentIdInProgress);
-                                        }
-                                        triggerAiPipelineChain();
+                                        entryRepository.updateOriginalHtml(doc.html(), currentIdInProgress);
+                                        entryRepository.updateContent(contentWithTitle, currentIdInProgress);
+                                        Log.e("PIPELINE_TRACE", "✅ CONTENT SAVED ID = " + currentIdInProgress);
+                                        Log.e("PIPELINE_TRACE", "🔥 trigger AI for ID = " + currentIdInProgress);
+                                        runSummarizationNow();
                                     }
                                 }
                             }
@@ -522,4 +454,43 @@ public class TtsExtractor {
 
     public boolean isLocked() { return isLockedByTtsPlayer; }
     public String getCurrentLanguage() { return currentLanguage; }
+
+    private void runSummarizationNow() {
+        new Thread(() -> {
+            synchronized (aiLock) {
+                try {
+                    Entry entry = entryRepository.getNextUnsummarizedEntry(
+                            sharedPreferencesRepository.getCurrentReadingEntryId(),
+                            sharedPreferencesRepository.getSortBy()
+                    );
+
+                    if (entry == null) return;
+
+                    Log.e("PIPELINE_TRACE", "⚡ DIRECT Processing ID = " + entry.getId());
+
+                    String html = entry.getOriginalHtml();
+                    if (html == null || html.isEmpty()) html = entry.getHtml();
+                    if (html == null || html.isEmpty()) return;
+
+                    String plainText = textUtil.extractHtmlContent(html, " ");
+
+                    String summary = translationRepository
+                            .summarizeText(
+                                    plainText,
+                                    sharedPreferencesRepository.getAiSummaryLength(),
+                                    sharedPreferencesRepository.getDefaultTranslationLanguage()
+                            )
+                            .blockingGet();
+
+                    if (summary != null && !summary.isEmpty()) {
+                        entryRepository.updateSummary(summary, entry.getId());
+                        entryRepository.markAsAiSummarized(entry.getId(), false);
+                    }
+
+                } catch (Exception e) {
+                    Log.e("PIPELINE_TRACE", "Direct summarization failed", e);
+                }
+            }
+        }).start();
+    }
 }

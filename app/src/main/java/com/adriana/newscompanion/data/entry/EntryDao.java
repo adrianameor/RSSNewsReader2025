@@ -307,4 +307,12 @@ public interface EntryDao {
                     "LIMIT 1"
     )
     Entry getNextEntryPrioritized(long currentId, String sortBy);
+
+    @Query("SELECT * FROM entry_table " +
+            "WHERE summary IS NULL OR summary = '' " +
+            "ORDER BY " +
+            "CASE WHEN id = :currentId THEN 0 ELSE 1 END, " +
+            "publishedDate DESC " +
+            "LIMIT 1")
+    Entry getNextUnsummarizedEntry(long currentId);
 }

@@ -483,4 +483,8 @@ public class EntryRepository {
             entryDao.updateTargetTranslationLanguage(lang, entryId);
         });
     }
+
+    public Entry getNextUnsummarizedEntry(long currentId, String sortBy) {
+        return entryDao.getNextUnsummarizedEntry(currentId);
+    }
 }
