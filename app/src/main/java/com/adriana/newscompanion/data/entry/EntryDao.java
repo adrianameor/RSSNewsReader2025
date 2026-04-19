@@ -308,11 +308,23 @@ public interface EntryDao {
     )
     Entry getNextEntryPrioritized(long currentId, String sortBy);
 
-    @Query("SELECT * FROM entry_table " +
-            "WHERE summary IS NULL OR summary = '' " +
-            "ORDER BY " +
-            "CASE WHEN id = :currentId THEN 0 ELSE 1 END, " +
-            "publishedDate DESC " +
-            "LIMIT 1")
-    Entry getNextUnsummarizedEntry(long currentId);
+    @Query(
+            "SELECT * FROM entry_table WHERE " +
+                    "    (:cleanEnabled = 1 AND isAiCleaned = 0) " +
+                    "    OR " +
+                    "    (:summarizeEnabled = 1 AND isAiSummarized = 0) " +
+                    "    OR " +
+                    "    (:translateEnabled = 1 AND (translated IS NULL OR translated = '')) " +
+                    "ORDER BY " +
+                    "    CASE WHEN id = :currentId THEN 0 ELSE 1 END, " +
+                    "    CASE " +
+                    "        WHEN :cleanEnabled = 1 AND isAiCleaned = 0 THEN 1 " +
+                    "        WHEN :summarizeEnabled = 1 AND isAiSummarized = 0 THEN 2 " +
+                    "        WHEN :translateEnabled = 1 AND (translated IS NULL OR translated = '') THEN 3 " +
+                    "        ELSE 4 " +
+                    "    END, " +
+                    "    publishedDate DESC " +
+                    "LIMIT 1"
+    )
+    Entry getNextEntryForAiProcessing(long currentId, int summarizeEnabled, int cleanEnabled, int translateEnabled);
 }

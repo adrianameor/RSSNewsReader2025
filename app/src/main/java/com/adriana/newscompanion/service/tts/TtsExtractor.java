@@ -10,6 +10,7 @@ import android.os.Looper;
 import android.util.JsonReader;
 import android.util.JsonToken;
 import android.util.Log;
+import android.webkit.CookieManager;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
@@ -20,6 +21,7 @@ import androidx.core.content.ContextCompat;
 
 import com.adriana.newscompanion.data.entry.Entry;
 import com.adriana.newscompanion.data.entry.EntryRepository;
+import com.adriana.newscompanion.data.feed.Feed;
 import com.adriana.newscompanion.data.feed.FeedRepository;
 import com.adriana.newscompanion.data.playlist.PlaylistRepository;
 import com.adriana.newscompanion.data.repository.TranslationRepository;
@@ -94,8 +96,8 @@ public class TtsExtractor {
         this.textUtil = textUtil;
         this.sharedPreferencesRepository = sharedPreferencesRepository;
         this.translationRepository = translationRepository;
-
         initWebView();
+        Log.e("INSTANCE_CHECK", "Extractor CREATED: " + this.hashCode());
     }
 
     private void initWebView() {
@@ -104,8 +106,10 @@ public class TtsExtractor {
                 webView.destroy();
             }
             webView = new WebView(context);
+            CookieManager.getInstance().setAcceptCookie(true);
+            CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
             webView.setWebViewClient(new WebClient());
-            webView.clearCache(true);
+            //webView.clearCache(true);
             webView.getSettings().setJavaScriptEnabled(true);
             webView.getSettings().setDomStorageEnabled(true);
             Log.d(TAG, "WebView Engine Re-Initialized.");
@@ -113,6 +117,7 @@ public class TtsExtractor {
     }
 
     private void extractWithHttp(Entry entry) {
+        Log.e("PROOF", "STEP 3A: HTTP EXTRACTION START ID = " + currentIdInProgress);
         startWatchdog(30000);
 
         new Thread(() -> {
@@ -128,7 +133,7 @@ public class TtsExtractor {
                 int responseCode = connection.getResponseCode();
                 if (responseCode != HttpURLConnection.HTTP_OK) {
                     Log.e(TAG, "HTTP Error " + responseCode + " for URL: " + entry.getLink());
-                    failedIds.add(currentIdInProgress);
+                    entryRepository.updateContent("FAILED", currentIdInProgress);
                     resetFlagsAndContinue();
                     return;
                 }
@@ -179,12 +184,18 @@ public class TtsExtractor {
                     } else {
                         String contentWithTitle = currentTitle + delimiter + finalFullText;
 
+                        // 🔥 ADD HERE
+                        if (currentIdInProgress == -1) {
+                            Log.e("SAFE_GUARD", "❌ Skip save: invalid ID");
+                            return;
+                        }
+
+                        entryRepository.updateOriginalHtml(doc.html(), currentIdInProgress); // 🔥 ADD THIS
                         entryRepository.updateHtml(doc.html(), currentIdInProgress);
-                        entryRepository.updateOriginalHtml(doc.html(), currentIdInProgress);
                         entryRepository.updateContent(contentWithTitle, currentIdInProgress);
                         Log.e("PIPELINE_TRACE", "✅ CONTENT SAVED ID = " + currentIdInProgress);
                         Log.e("PIPELINE_TRACE", "🔥 trigger AI for ID = " + currentIdInProgress);
-                        runSummarizationNow();
+                        runAiPipelineNow();
                     }
                 } else {
                     failedIds.add(currentIdInProgress);
@@ -207,14 +218,16 @@ public class TtsExtractor {
     }
 
     private void extractWithWebView(Entry entry) {
+        Log.e("PROOF", "STEP 3B: WEBVIEW EXTRACTION START ID = " + currentIdInProgress);
         ContextCompat.getMainExecutor(context).execute(() -> webView.loadUrl(entry.getLink()));
         startWatchdog(45000);
     }
 
     public void extractAllEntries() {
+        Log.e("PIPELINE_TRACE", "🔥 ENTER extractAllEntries()");
         if (extractionInProgress) return;
 
-        if (loadCounter >= 20) {
+        if (loadCounter >= 100) {
             Log.d(TAG, "Recycling WebView engine...");
             loadCounter = 0;
             initWebView();
@@ -222,41 +235,60 @@ public class TtsExtractor {
             return;
         }
 
-        Entry entry = entryRepository.getEmptyContentEntry();
+        Entry entry;
 
-        if (entry == null && !failedIds.isEmpty()) {
-            long retryId = failedIds.remove(0);
-            int attempts = retryCountMap.getOrDefault(retryId, 0);
-            if (attempts < MAX_RETRIES) {
-                retryCountMap.put(retryId, attempts + 1);
-                entry = entryRepository.getEntryById(retryId);
-            } else {
-                extractAllEntries();
-                return;
+        while (true) {
+            entry = entryRepository.getEmptyContentEntry();
+            Log.e("CHECK", "entry = " + entry);
+
+            if (entry == null) {
+                Log.e("PROOF", "❌ NO ENTRY FOUND (queue empty)");
+                return; // 🔥 EXIT SAFELY (NO CRASH)
             }
+
+            int attempts = retryCountMap.getOrDefault(entry.getId(), 0);
+
+            if (attempts >= MAX_RETRIES) {
+                Log.e("PIPELINE_TRACE", "❌ HARD SKIP ID: " + entry.getId());
+
+                retryCountMap.remove(entry.getId());
+
+                entryRepository.updateContent("", entry.getId());
+
+                continue; // 🔥 SKIP THIS ENTRY
+            }
+
+            break; // ✅ VALID ENTRY FOUND
         }
 
-        if (entry != null) {
-            extractionInProgress = true;
-            currentIdInProgress = entry.getId();
-            currentLink = entry.getLink();
-            currentTitle = entry.getTitle();
-            delayTime = feedRepository.getDelayTimeById(entry.getFeedId());
-            loadCounter++;
+// ✅ NOW ENTRY IS GUARANTEED NOT NULL
+        Log.e("PROOF", "STEP 2: ENTRY FOUND ID = " + entry.getId());
 
-            // Router: Check if feed requires authentication or has been flagged for WebView
-            com.adriana.newscompanion.data.feed.Feed feed = feedRepository.getFeedById(entry.getFeedId());
-            if (feed != null && (feed.isAuthenticated() || feedsRequiringWebView.contains(feed.getId()))) {
-                Log.d(TAG, "Processing Article ID: " + currentIdInProgress + " [" + loadCounter + "/20] - Using WebView (authenticated or flagged)");
-                extractWithWebView(entry);
-            } else {
-                Log.d(TAG, "Processing Article ID: " + currentIdInProgress + " [" + loadCounter + "/20] - Using HTTP (non-authenticated)");
-                extractWithHttp(entry);
-            }
-        } else {
-            Log.d(TAG, "No more articles in queue.");
-            Log.e("PIPELINE_TRACE", "🔥 trigger AI for ID = " + currentIdInProgress);
-            runSummarizationNow();
+        extractionInProgress = true;
+        currentIdInProgress = entry.getId();
+        Log.e("PIPELINE_TRACE", "🚀 START EXTRACTION ID = " + currentIdInProgress);
+
+        currentLink = entry.getLink();
+        currentTitle = entry.getTitle();
+
+        delayTime = feedRepository.getDelayTimeById(entry.getFeedId());
+        if (delayTime <= 0) delayTime = 3;
+
+        Log.e("DELAY_DEBUG", "delayTime = " + delayTime + " for ID = " + entry.getId());
+
+        loadCounter++;
+
+// 🔥 ROUTER (UNCHANGED)
+        com.adriana.newscompanion.data.feed.Feed feed = feedRepository.getFeedById(entry.getFeedId());
+
+        if (feed != null && feed.isAuthenticated()) {
+            extractWithWebView(entry);
+        }
+        else if (feed != null && feedsRequiringWebView.contains(feed.getId())) {
+            extractWithWebView(entry);
+        }
+        else {
+            extractWithHttp(entry);
         }
     }
 
@@ -349,11 +381,19 @@ public class TtsExtractor {
     public void setCallback(WebViewListener callback) { this.webViewCallback = callback; }
 
     public void prioritize() {
+        Log.e("ENTRY_POINT", "prioritize CALLED");
         Date newPlaylistDate = playlistRepository.getLatestPlaylistCreatedDate();
         if (playlistDate == null || !playlistDate.equals(newPlaylistDate)) {
             playlistDate = newPlaylistDate;
             entryRepository.clearPriority();
-            List<Long> playlist = stringToLongList(playlistRepository.getLatestPlaylist());
+            String raw = playlistRepository.getLatestPlaylist();
+
+            if (raw == null || raw.isEmpty()) {
+                Log.e("SAFE_GUARD", "⚠️ No playlist yet → skip prioritize()");
+                return;
+            }
+
+            List<Long> playlist = stringToLongList(raw);
             long lastId = entryRepository.getLastVisitedEntryId();
             int index = playlist.indexOf(lastId);
             int priority = 1;
@@ -375,7 +415,7 @@ public class TtsExtractor {
         @Override
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
-            if (extractionInProgress && webView.getProgress() == 100) {
+            if (extractionInProgress) {
                 handler.postDelayed(() -> webView.evaluateJavascript("(function() {return document.getElementsByTagName('html')[0].outerHTML;})();", value -> {
                     JsonReader reader = new JsonReader(new StringReader(value));
                     reader.setLenient(true);
@@ -383,6 +423,8 @@ public class TtsExtractor {
                     try {
                         if (reader.peek() == JsonToken.STRING) {
                             String html = reader.nextString();
+
+                            Log.e("HTML_SIZE", "WebView HTML length = " + (html != null ? html.length() : 0));
                             if (html != null) {
                                 Readability4JExtended readability4J = new Readability4JExtended(currentLink, html);
                                 Article article = readability4J.parse();
@@ -409,16 +451,22 @@ public class TtsExtractor {
                                     }
                                     String finalFullText = contentCollector.toString();
                                     if (finalFullText.length() < 200 || finalFullText.toLowerCase().contains("please enable javascript")) {
-                                        failedIds.add(currentIdInProgress);
+                                        entryRepository.updateContent("", currentIdInProgress);
                                     } else {
                                         String contentWithTitle = currentTitle + delimiter + finalFullText;
 
+                                        // 🔥 ADD HERE
+                                        if (currentIdInProgress == -1) {
+                                            Log.e("SAFE_GUARD", "❌ Skip save: invalid ID");
+                                            return;
+                                        }
+
+                                        entryRepository.updateOriginalHtml(doc.html(), currentIdInProgress); // 🔥 ADD THIS
                                         entryRepository.updateHtml(doc.html(), currentIdInProgress);
-                                        entryRepository.updateOriginalHtml(doc.html(), currentIdInProgress);
                                         entryRepository.updateContent(contentWithTitle, currentIdInProgress);
                                         Log.e("PIPELINE_TRACE", "✅ CONTENT SAVED ID = " + currentIdInProgress);
                                         Log.e("PIPELINE_TRACE", "🔥 trigger AI for ID = " + currentIdInProgress);
-                                        runSummarizationNow();
+                                        runAiPipelineNow();
                                     }
                                 }
                             }
@@ -435,6 +483,7 @@ public class TtsExtractor {
                     }
                 }), delayTime * 1000L);
             }
+            Log.e(TAG, "🌐 WebView finished loading: " + url);
         }
     }
 
@@ -447,46 +496,144 @@ public class TtsExtractor {
 
     public List<Long> stringToLongList(String genreIds) {
         List<Long> list = new ArrayList<>();
+
+        if (genreIds == null || genreIds.isEmpty()) {
+            Log.e("SAFE_GUARD", "⚠️ playlist is null or empty");
+            return list; // 🔥 RETURN EMPTY LIST
+        }
+
         String[] array = genreIds.split(",");
-        for (String s : array) if (!s.isEmpty()) list.add(Long.parseLong(s));
+
+        for (String s : array) {
+            if (!s.isEmpty()) list.add(Long.parseLong(s));
+        }
+
         return list;
     }
 
     public boolean isLocked() { return isLockedByTtsPlayer; }
     public String getCurrentLanguage() { return currentLanguage; }
 
-    private void runSummarizationNow() {
+    private void runAiPipelineNow() {
         new Thread(() -> {
             synchronized (aiLock) {
                 try {
-                    Entry entry = entryRepository.getNextUnsummarizedEntry(
-                            sharedPreferencesRepository.getCurrentReadingEntryId(),
-                            sharedPreferencesRepository.getSortBy()
-                    );
+                    boolean doSummarize = sharedPreferencesRepository.isSummarizationEnabled();
+                    boolean doTranslate = sharedPreferencesRepository.getAutoTranslate();
+                    boolean doClean = sharedPreferencesRepository.isAiCleaningEnabled();
 
-                    if (entry == null) return;
+                    while (true) {
 
-                    Log.e("PIPELINE_TRACE", "⚡ DIRECT Processing ID = " + entry.getId());
+                        Entry entry = entryRepository.getNextEntryForAiProcessing(
+                                sharedPreferencesRepository.getCurrentReadingEntryId(),
+                                doSummarize,
+                                doClean,
+                                doTranslate
+                        );
 
-                    String html = entry.getOriginalHtml();
-                    if (html == null || html.isEmpty()) html = entry.getHtml();
-                    if (html == null || html.isEmpty()) return;
+                        if (entry == null) break;
 
-                    String plainText = textUtil.extractHtmlContent(html, " ");
+                        String html;
 
-                    String summary = translationRepository
-                            .summarizeText(
-                                    plainText,
-                                    sharedPreferencesRepository.getAiSummaryLength(),
-                                    sharedPreferencesRepository.getDefaultTranslationLanguage()
-                            )
-                            .blockingGet();
+                        if (entry.isAiCleaned() && entry.getHtml() != null) {
+                            html = entry.getHtml(); // ✅ cleaned HTML first
+                        } else {
+                            html = entry.getOriginalHtml();
+                        }
+                        if (html == null || html.isEmpty()) continue;
 
-                    if (summary != null && !summary.isEmpty()) {
-                        entryRepository.updateSummary(summary, entry.getId());
-                        entryRepository.markAsAiSummarized(entry.getId(), false);
+                        String plainText = textUtil.extractHtmlContent(html, delimiter);
+
+                        String text = plainText;
+
+                        // CLEAN
+                        if (doClean) {
+                            Log.e("CLEAN_DEBUG", "🔥 START CLEAN ID = " + entry.getId());
+                            Log.e("CLEAN_DEBUG", "FLAG doClean = " + doClean);
+                            try {
+                                String cleanedHtml = translationRepository
+                                        .cleanArticleHtml(html)
+                                        .blockingGet();
+
+                                if (cleanedHtml != null && !cleanedHtml.isEmpty()) {
+
+                                    if (cleanedHtml.contains("<p") && cleanedHtml.contains("</p>")) {
+                                        entryRepository.updateHtml(cleanedHtml, entry.getId());
+                                    } else {
+                                        Log.e("CLEANING", "❌ INVALID HTML → SKIPPED");
+                                    }
+
+                                    String cleanedText = textUtil.extractHtmlContent(cleanedHtml, delimiter);
+                                    String finalContent = entry.getTitle() + delimiter + cleanedText;
+
+                                    entryRepository.updateContent(finalContent, entry.getId());
+                                }
+                                Log.e("CLEAN_DEBUG", "✅ DONE CLEAN ID = " + entry.getId());
+                                Log.e("CLEAN_DEBUG", "RESULT (first 100) = " + cleanedHtml.substring(0, Math.min(100, cleanedHtml.length())));
+
+                            } catch (Exception ignored) {}
+
+                            entryRepository.markAsAiCleaned(entry.getId());
+                        }
+
+                        if (doSummarize) {
+                            try {
+                                String result = translationRepository.summarizeText(
+                                        text,
+                                        sharedPreferencesRepository.getAiSummaryLength(),
+                                        sharedPreferencesRepository.getDefaultTranslationLanguage()
+                                ).blockingGet();
+
+                                if (result != null && !result.isEmpty()) {
+                                    entryRepository.updateSummary(result, entry.getId());
+                                }
+
+                            } catch (Exception ignored) {}
+
+                            entryRepository.markAsAiSummarized(entry.getId(), false);
+                        }
+
+                        if (doTranslate) {
+                            Log.e("TRANSLATE_DEBUG", "🔥 START ID = " + entry.getId());
+                            Log.e("TRANSLATE_DEBUG", "TARGET = " + sharedPreferencesRepository.getDefaultTranslationLanguage());
+                            try {
+                                String translated = translationRepository.translateText(
+                                        text,
+                                        "auto",
+                                        sharedPreferencesRepository.getDefaultTranslationLanguage()
+                                ).blockingGet();
+
+                                if (translated != null && !translated.isEmpty()) {
+                                    String translatedTitle = translationRepository.translateText(
+                                            entry.getTitle(),
+                                            "auto",
+                                            sharedPreferencesRepository.getDefaultTranslationLanguage()
+                                    ).blockingGet();
+
+                                    entryRepository.updateTranslatedTitle(translatedTitle, entry.getId());
+
+                                    String finalTranslated = translatedTitle + delimiter + translated;
+                                    entryRepository.updateTranslatedText(finalTranslated, entry.getId());
+                                }
+                                Log.e("TRANSLATE_DEBUG", "✅ DONE ID = " + entry.getId());
+                                Log.e("TRANSLATE_DEBUG", "RESULT = " + translated);
+
+                            } catch (Exception ignored) {}
+
+                            // ✅ ALWAYS mark translation done (CRITICAL)
+                            /*entryRepository.updateTranslatedText(
+                                    entry.getTitle() + delimiter + text,
+                                    entry.getId()
+                            );*/
+                        }
+                        // 🔥 FORCE REFRESH FROM DB (CRITICAL)
+                        entry = entryRepository.getEntryById(entry.getId());
+
+                        Log.e("DEBUG_AI", "AFTER UPDATE ID = " + entry.getId()
+                                + " | clean=" + entry.isAiCleaned()
+                                + " | summary=" + entry.isAiSummarized()
+                                + " | translated=" + entry.getTranslated());
                     }
-
                 } catch (Exception e) {
                     Log.e("PIPELINE_TRACE", "Direct summarization failed", e);
                 }

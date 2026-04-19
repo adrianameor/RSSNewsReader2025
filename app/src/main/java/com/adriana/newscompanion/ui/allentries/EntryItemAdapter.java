@@ -178,6 +178,7 @@ public class EntryItemAdapter extends ListAdapter<EntryInfo, EntryItemAdapter.En
             });
 
             view.setOnClickListener(v -> {
+                Log.e("CLICK_DEBUG", "ITEM CLICKED ID = " + entryInfo.getEntryId());
                 if (entryItemClickInterface != null) {
                     boolean isTranslated = !TextUtils.isEmpty(entryInfo.getTranslated())
                             && entryInfo.getTranslated().contains("--####--");

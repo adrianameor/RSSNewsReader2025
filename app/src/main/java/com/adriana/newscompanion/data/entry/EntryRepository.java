@@ -108,6 +108,7 @@ public class EntryRepository {
     }
 
     public void updateHtml(String html, long id) {
+        Log.e("DATA_FLOW", "⚠️ updateHtml called for ID=" + id);
         entryDao.updateHtml(html, id);
     }
 
@@ -455,7 +456,9 @@ public class EntryRepository {
     }
 
     public void markAsAiCleaned(long id) {
-        entryDao.markAsAiCleaned(id);
+        Schedulers.io().scheduleDirect(() ->
+                entryDao.markAsAiCleaned(id)
+        );
     }
 
     public List<Entry> getUnsummarizedEntriesPrioritized(long currentReadingId, String sortBy) {
@@ -467,7 +470,9 @@ public class EntryRepository {
     }
 
     public void markAsAiSummarized(long id, boolean isTranslated) {
-        entryDao.markAsAiSummarized(id, isTranslated);
+        Schedulers.io().scheduleDirect(() ->
+                entryDao.markAsAiSummarized(id, isTranslated)
+        );
     }
 
     public Entry getFirstEntryByFeedId(long feedId) {
@@ -484,7 +489,16 @@ public class EntryRepository {
         });
     }
 
-    public Entry getNextUnsummarizedEntry(long currentId, String sortBy) {
-        return entryDao.getNextUnsummarizedEntry(currentId);
+    public Entry getNextEntryForAiProcessing(long currentId,
+                                             boolean summarizeEnabled,
+                                             boolean cleanEnabled,
+                                             boolean translateEnabled) {
+
+        return entryDao.getNextEntryForAiProcessing(
+                currentId,
+                summarizeEnabled ? 1 : 0,
+                cleanEnabled ? 1 : 0,
+                translateEnabled ? 1 : 0
+        );
     }
 }

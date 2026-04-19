@@ -39,6 +39,7 @@ public class RssWorker extends Worker {
     @NonNull
     @Override
     public Result doWork() {
+        Log.e("INSTANCE_CHECK", "Worker Extractor: " + ttsExtractor.hashCode());
         try {
             Log.d(TAG, "=== Starting Global Sync & Recovery ===");
             

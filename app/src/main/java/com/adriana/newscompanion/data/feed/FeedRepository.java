@@ -239,7 +239,11 @@ public class FeedRepository {
         if (entryRepository.hasEmptyContentEntries()) {
             new Handler(Looper.getMainLooper()).post(() -> {
                 Log.d(TAG, "Dispatching call to extractAllEntries() to the main thread.");
-                ttsExtractorProvider.get().extractAllEntries();
+
+                TtsExtractor extractor = ttsExtractorProvider.get(); // ✅ DEFINE IT HERE
+                Log.e("INSTANCE_CHECK", "FeedRepo Extractor: " + extractor.hashCode());
+
+                extractor.extractAllEntries(); // ✅ use it
             });
         }
 

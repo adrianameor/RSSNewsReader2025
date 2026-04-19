@@ -1,5 +1,7 @@
 package com.adriana.newscompanion.data.repository;
 
+import android.util.Log;
+
 import javax.inject.Inject;
 import javax.inject.Singleton;
 
@@ -83,10 +85,12 @@ public class TranslationRepository {
                                 cleanedHtml = cleanedHtml.substring(0, cleanedHtml.length() - 3); // Remove trailing ```
                             }
                             cleanedHtml = cleanedHtml.trim();
-                            
-                            // Validate it's actually HTML (contains HTML tags)
-                            if (cleanedHtml.contains("<") && cleanedHtml.contains(">")) {
+
+                            if (cleanedHtml.contains("<p") && cleanedHtml.contains("</p>")) {
                                 return cleanedHtml;
+                            } else {
+                                Log.e("CLEANING_DEBUG", "INVALID CLEANED HTML → USING ORIGINAL");
+                                return originalHtml;
                             }
                         }
                     }

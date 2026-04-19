@@ -119,7 +119,9 @@ public class TranslationWorker extends Worker {
                 }
 
                 // 3. API PHASE: Perform actual AI translation
-                Log.d(TAG, "WORKER: Translating ID " + entry.getEntryId() + " (" + finalSourceLang + " -> " + targetLang + ")");
+                Log.e("TRANSLATE_DEBUG", "🔥 START ID = " + entry.getEntryId());
+                Log.e("TRANSLATE_DEBUG", "SOURCE = " + finalSourceLang);
+                Log.e("TRANSLATE_DEBUG", "TARGET = " + targetLang);
 
                 // Translate Title
                 String translatedTitle = entry.getTranslatedTitle();
@@ -143,6 +145,8 @@ public class TranslationWorker extends Worker {
 
                     String translatedHtml = translationRepository.translateText(cleanedHtml, finalSourceLang, targetLang).blockingGet();
 
+                    Log.e("TRANSLATE_DEBUG", "✅ DONE ID = " + entry.getEntryId());
+                    Log.e("TRANSLATE_DEBUG", "RESULT (first 100) = " + translatedHtml.substring(0, Math.min(100, translatedHtml.length())));
                     // 🔥 ADD AGAIN BEFORE WRITING HTML
                     String latestLangCheck2 = sharedPreferencesRepository.getDefaultTranslationLanguage();
                     if (!targetLang.equals(latestLangCheck2)) {

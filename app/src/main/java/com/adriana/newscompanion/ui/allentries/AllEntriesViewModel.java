@@ -1,6 +1,8 @@
 package com.adriana.newscompanion.ui.allentries;
 
 
+import android.util.Log;
+
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
 import androidx.lifecycle.ViewModel;
@@ -58,10 +60,9 @@ public class AllEntriesViewModel extends ViewModel {
         this.sharedPreferencesRepository = sharedPreferencesRepository;
         this.ttsExtractor = ttsExtractor;
         this.ttsPlayer = ttsPlayer;
-
         liveEntries = entryRepository.getAllEntriesLive();
-
         getEntriesByFeed(0, "all");
+        Log.e("INSTANCE_CHECK", "ViewModel Extractor: " + ttsExtractor.hashCode());
     }
 
     public String getSortBy() {
@@ -217,9 +218,11 @@ public class AllEntriesViewModel extends ViewModel {
     }
 
     public void refreshEntries(SwipeRefreshLayout swipeRefreshLayout) {
+        Log.e("REFRESH_TRACE", "🔥 refreshEntries() START");
         Completable.fromAction(new Action() {
                     @Override
                     public void run() throws Throwable {
+                        Log.e("REFRESH_TRACE", "🔥 inside fromAction()");
                         String text = feedRepository.refreshEntries();
                         toastMessage.postValue(text);
                     }
@@ -232,7 +235,9 @@ public class AllEntriesViewModel extends ViewModel {
 
                     @Override
                     public void onComplete() {
+                        Log.e("REFRESH_TRACE", "🔥 onComplete() CALLED");
                         swipeRefreshLayout.setRefreshing(false);
+                        Log.e("REFRESH_TRACE", "🔥 CALLING extractAllEntries()");
                         ttsExtractor.extractAllEntries();
                     }
 
@@ -241,6 +246,7 @@ public class AllEntriesViewModel extends ViewModel {
 
                     }
                 });
+        Log.e("REFRESH_DEBUG", "onComplete CALLED");
     }
 
     public void updateBookmark(String bool, long id) {
@@ -271,5 +277,10 @@ public class AllEntriesViewModel extends ViewModel {
 
                     }
                 });
+    }
+
+    public void triggerExtraction() {
+        Log.e("PIPELINE_TRACE", "🔥 ViewModel triggerExtraction()");
+        ttsExtractor.extractAllEntries();
     }
 }

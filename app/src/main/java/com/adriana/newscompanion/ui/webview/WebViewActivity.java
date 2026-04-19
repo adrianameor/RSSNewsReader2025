@@ -361,8 +361,8 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
-
+        ttsExtractor.prioritize();
+        Log.e("TRACE", "🚀 onCreate STARTED");
         webViewViewModel = new ViewModelProvider(this).get(WebViewViewModel.class);
         initializeTranslationObservers();
         initializeSummarizationObservers();
@@ -418,6 +418,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
     private void initializeUI() {
         binding = ActivityWebviewBinding.inflate(getLayoutInflater());
+        Log.e("SCREEN_DEBUG", "🔥🔥🔥 WEBVIEW ACTIVITY IS OPENED");
         setContentView(binding.getRoot());
 
         webView = binding.webview;
@@ -454,17 +455,11 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
     private void loadHtmlIntoWebView(String html) {
         EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
+
         String titleToDisplay;
 
         if (entryInfo != null) {
-            if (isTranslatedView) {
-                titleToDisplay = entryInfo.getTranslatedTitle();
-                if (titleToDisplay == null || titleToDisplay.isEmpty()) {
-                    titleToDisplay = entryInfo.getEntryTitle();
-                }
-            } else {
-                titleToDisplay = entryInfo.getEntryTitle();
-            }
+            titleToDisplay = entryInfo.getEntryTitle();
         } else {
             titleToDisplay = "Title not available";
         }
@@ -492,12 +487,19 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     }
 
     private void loadEntryContent() {
+        Log.e("TRACE", "🔥 loadEntryContent() CALLED");
+        String htmlToLoad = "";
+        String titleToDisplay = "";
+        String contentForTts = "";
+        String langForTts = "en"; // safe default
         long entryId = getIntent().getLongExtra("entry_id", -1);
+        Log.e("TRACE", "entryId = " + entryId);
         if (entryId == -1) { makeSnackbar("Error: No article ID provided."); finish(); return; }
         currentId = entryId;
         currentPlaylistIndex = ttsPlaylist.indexOf(currentId);
 
         EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
+        Log.e("TRACE", "entryInfo = " + entryInfo);
         if (entryInfo == null) { makeSnackbar("Error: Could not load article data."); finish(); return; }
 
         currentLink = entryInfo.getEntryLink();
@@ -508,17 +510,26 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             ttsPlaylist.updatePlayingId(currentId);
         }
 
-        String currentHtml = entryInfo.getHtml();
         String originalHtml = entryRepository.getOriginalHtmlById(currentId);
+        Log.e("TRACE", "🔥 REACHED HTML SECTION");
+        Log.e("HTML_DEBUG", "===== ORIGINAL_HTML FROM DB =====");
+        Log.e("HTML_DEBUG", originalHtml);
+        Log.e("HTML_DEBUG", "===== ENTRYINFO HTML =====");
+        Log.e("HTML_DEBUG", "content = " + entryInfo.getContent());
+        if ((originalHtml == null || originalHtml.trim().isEmpty())
+                && (entryInfo.getContent() == null || entryInfo.getContent().trim().isEmpty())) {
 
-        if (currentHtml == null || currentHtml.trim().isEmpty()) {
             webView.loadUrl(currentLink);
-            if (getSupportActionBar() != null) getSupportActionBar().setTitle(entryInfo.getEntryTitle());
+            if (getSupportActionBar() != null) {
+                getSupportActionBar().setTitle(entryInfo.getEntryTitle());
+            }
+
             browserButton.setVisible(false);
             offlineButton.setVisible(false);
             toggleTranslationButton.setVisible(false);
             summarizeButton.setVisible(false);
             translationButton.setVisible(false);
+
             return;
         }
 
@@ -527,21 +538,19 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         boolean summaryExists = entryInfo.getSummary() != null && !entryInfo.getSummary().trim().isEmpty();
 
         if (isInitialLoad) {
+
             if (sharedPreferencesRepository.isSummarizationEnabled() && summaryExists) {
-                isSummaryView = true;
+                isSummaryView = true;   // ✅ show summary first
+                isTranslatedView = false;
             } else {
                 isSummaryView = false;
                 isTranslatedView = autoTranslateOn && translationExists;
             }
+
             isInitialLoad = false;
         }
 
         sharedPreferencesRepository.setIsTranslatedView(currentId, isTranslatedView);
-
-        String htmlToLoad;
-        String titleToDisplay;
-        String contentForTts;
-        String langForTts;
 
         if (isSummaryView) {
             String summaryText = entryInfo.getSummary();
@@ -560,6 +569,8 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 if (!p.trim().isEmpty()) htmlSummary.append("<p>").append(p).append("</p>");
             }
             htmlToLoad = htmlSummary.toString();
+            Log.e("HTML_DEBUG", "===== SUMMARY HTML =====");
+            Log.e("HTML_DEBUG", htmlSummary.toString());
             String processedSummary = summaryText.replace("\n\n", " --####-- ");
             contentForTts = titleToDisplay + " --####-- " + processedSummary;
 
@@ -573,14 +584,61 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             browserButton.setVisible(false);
         } else {
             if (isTranslatedView && translationExists) {
-                htmlToLoad = currentHtml;
-                titleToDisplay = entryInfo.getTranslatedTitle();
-                contentForTts = titleToDisplay + " --####-- " + entryInfo.getTranslated();
-                langForTts = sharedPreferencesRepository.getDefaultTranslationLanguage();
+                Log.e("LANG_DEBUG", "Target lang = " + sharedPreferencesRepository.getDefaultTranslationLanguage());
+                Log.e("LANG_DEBUG", "Translated content = " + entryInfo.getTranslated());
+
+                String translatedText = entryInfo.getTranslated();
+
+                if (translatedText != null && !translatedText.isEmpty()) {
+
+                    String[] parts = translatedText.split("--####--", 2);
+
+                    String translatedTitle = parts[0];
+                    String body = parts.length > 1 ? parts[1] : "";
+
+                    titleToDisplay = translatedTitle;
+
+                    // 🔥 KEY FIX: rebuild paragraphs properly
+                    String[] sentences = body.split("--####--");
+
+                    StringBuilder htmlBuilder = new StringBuilder();
+                    for (String s : sentences) {
+                        if (!s.trim().isEmpty()) {
+                            htmlBuilder.append("<p>").append(s.trim()).append("</p>");
+                        }
+                    }
+
+                    htmlToLoad = htmlBuilder.toString();
+
+                    contentForTts = translatedText;
+                    langForTts = sharedPreferencesRepository.getDefaultTranslationLanguage();
+                } else {
+                    htmlToLoad = "<p>No translated content available</p>";
+                }
+
+                titleToDisplay = entryInfo.getTranslatedTitle() != null
+                        ? entryInfo.getTranslatedTitle()
+                        : entryInfo.getEntryTitle();
             } else {
-                htmlToLoad = originalHtml;
+                // 🔥 PRIORITY 1: CLEANED HTML
+                if (entryInfo.isAiCleaned() && entryInfo.getHtml() != null && !entryInfo.getHtml().trim().isEmpty()) {
+                    htmlToLoad = entryInfo.getHtml();
+                }
+
+                // 🔥 PRIORITY 2: ORIGINAL HTML
+                else if (originalHtml != null && !originalHtml.trim().isEmpty()) {
+                    htmlToLoad = originalHtml;
+                }
+
+                // 🔥 LAST FALLBACK
+                else {
+                    htmlToLoad = "<p>" + entryInfo.getContent() + "</p>";
+                }
+
+                Log.e("HTML_DEBUG", "===== ORIGINAL HTML =====");
+                Log.e("HTML_DEBUG", htmlToLoad);
                 titleToDisplay = entryInfo.getEntryTitle();
-                contentForTts = titleToDisplay + " --####-- " + entryInfo.getContent();
+                contentForTts = entryInfo.getEntryTitle() + " --####-- " + entryInfo.getContent();
                 langForTts = entryInfo.getFeedLanguage();
             }
             summarizeButton.setTitle("Show Summary");
@@ -604,10 +662,6 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         } else {
             bookmarkButton.setIcon(ContextCompat.getDrawable(this, R.drawable.ic_bookmark_filled));
         }
-
-        // ❌ REMOVED: UI must NEVER call ttsPlayer.extract()
-        // Only Service calls extract() when user presses Play
-        // This was the ROOT CAUSE of all TTS bugs!
 
         sharedPreferencesRepository.setCurrentTtsContent(contentForTts);
         sharedPreferencesRepository.setCurrentTtsLang(langForTts);
@@ -670,8 +724,8 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                     }
                 }
 
-                loadHtmlIntoWebView(htmlSummary.toString(), summaryTitle);
                 isSummaryView = true;
+                loadEntryContent();
                 summarizeButton.setTitle("Show Full Article");
                 toggleTranslationButton.setVisible(false);
                 browserButton.setVisible(false);
@@ -1166,14 +1220,29 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             String titleWithPrefix = getString(R.string.summary_prefix) + ": " + baseTitle;
             String processedSummary = summaryText.replace("\n\n", " --####-- ");
             state.textToRead = titleWithPrefix + " --####-- " + processedSummary;
-            
-            state.language = entryInfo.isAiSummaryTranslated() 
-                ? sharedPreferencesRepository.getDefaultTranslationLanguage()
-                : entryInfo.getFeedLanguage();
+
+            String detectedLang = textUtil.identifyLanguageRx(summaryText).blockingGet();
+            state.language = detectedLang != null ? detectedLang : "en";
                 
         } else if (isTranslatedView && entryInfo.getTranslated() != null && !entryInfo.getTranslated().trim().isEmpty()) {
             state.mode = PlaybackStateModel.PlaybackMode.TRANSLATED;
-            state.textToRead = entryInfo.getTranslatedTitle() + " --####-- " + entryInfo.getTranslated();
+            String translatedText = entryInfo.getTranslated();
+
+            String[] parts = translatedText.split("--####--", 2);
+            String body = parts.length > 1 ? parts[1] : parts[0];
+
+            // 🔥 rebuild proper delimiter for TTS
+            String[] sentences = body.split("--####--");
+
+            StringBuilder rebuilt = new StringBuilder();
+            for (String s : sentences) {
+                if (!s.trim().isEmpty()) {
+                    if (rebuilt.length() > 0) rebuilt.append(" --####-- ");
+                    rebuilt.append(s.trim());
+                }
+            }
+
+            state.textToRead = entryInfo.getTranslatedTitle() + " --####-- " + rebuilt.toString();
             state.language = sharedPreferencesRepository.getDefaultTranslationLanguage();
             
         } else {
@@ -1198,7 +1267,8 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         Log.d(TAG, "   Current index: " + state.currentIndex);
         Log.d(TAG, "   Language: " + state.language);
         Log.d(TAG, "   Text length: " + state.textToRead.length());
-        
+
+        ttsExtractor.setCurrentLanguage(state.language, true);
         return state;
     }
 

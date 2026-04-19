@@ -266,7 +266,7 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
                 .observeOn(io.reactivex.rxjava3.android.schedulers.AndroidSchedulers.mainThread())
                 .subscribe(
                         translatedHtml -> {
-                            entryRepository.updateHtml(translatedHtml, entryInfo.getEntryId());
+                            entryRepository.updateTranslated(translatedHtml, entryInfo.getEntryId());
                             Document doc = Jsoup.parse(translatedHtml);
                             String translatedTitleText = doc.selectFirst("div.entry-header > p:first-of-type") != null 
                                 ? doc.selectFirst("div.entry-header > p:first-of-type").text() : "";
@@ -274,7 +274,6 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
                             String translatedBodyText = textUtil.extractHtmlContent(doc.body().html(), "--####--");
                             entryRepository.updateTranslatedTitle(translatedTitleText, entryInfo.getEntryId());
                             entryRepository.updateTranslatedSummary(translatedBodyText, entryInfo.getEntryId());
-                            entryRepository.updateTranslated(translatedTitleText + "--####--" + translatedBodyText, entryInfo.getEntryId());
                             allEntriesViewModel.getEntriesByFeed(feedId, filterBy);
                         },
                         throwable -> {}
@@ -477,6 +476,8 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
     @Override
     public void onResume() {
         super.onResume();
+        //Log.e("PIPELINE_TRACE", "🔥 Fragment forcing extraction");
+        //allEntriesViewModel.triggerExtraction();
         LocalBroadcastManager.getInstance(requireContext()).registerReceiver(translationFinishedReceiver, new IntentFilter("translation-finished"));
     }
 }
