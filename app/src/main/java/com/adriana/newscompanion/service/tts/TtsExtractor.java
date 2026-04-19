@@ -109,7 +109,6 @@ public class TtsExtractor {
             CookieManager.getInstance().setAcceptCookie(true);
             CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
             webView.setWebViewClient(new WebClient());
-            //webView.clearCache(true);
             webView.getSettings().setJavaScriptEnabled(true);
             webView.getSettings().setDomStorageEnabled(true);
             Log.d(TAG, "WebView Engine Re-Initialized.");
@@ -219,6 +218,8 @@ public class TtsExtractor {
 
     private void extractWithWebView(Entry entry) {
         Log.e("PROOF", "STEP 3B: WEBVIEW EXTRACTION START ID = " + currentIdInProgress);
+        String cookie = android.webkit.CookieManager.getInstance().getCookie(entry.getLink());
+        Log.e("COOKIE_DEBUG", "Cookie for " + entry.getLink() + " = " + cookie);
         ContextCompat.getMainExecutor(context).execute(() -> webView.loadUrl(entry.getLink()));
         startWatchdog(45000);
     }
@@ -239,9 +240,14 @@ public class TtsExtractor {
 
         while (true) {
             entry = entryRepository.getEmptyContentEntry();
-            Log.e("CHECK", "entry = " + entry);
-
-            if (entry == null) {
+            if (entry != null) {
+                Log.e("DB_DEBUG", "ENTRY FOUND → ID=" + entry.getId()
+                        + " | content=" + entry.getContent()
+                        + " | html=" + entry.getHtml()
+                        + " | originalHtml=" + entry.getOriginalHtml());
+            } else {
+                Log.e("DB_DEBUG", "❌ entry = NULL (NO EMPTY ENTRY FOUND)");
+            } if (entry == null) {
                 Log.e("PROOF", "❌ NO ENTRY FOUND (queue empty)");
                 return; // 🔥 EXIT SAFELY (NO CRASH)
             }
@@ -282,6 +288,7 @@ public class TtsExtractor {
         com.adriana.newscompanion.data.feed.Feed feed = feedRepository.getFeedById(entry.getFeedId());
 
         if (feed != null && feed.isAuthenticated()) {
+            Log.e("AUTH_DEBUG", "Feed marked authenticated BUT cookies may not exist");
             extractWithWebView(entry);
         }
         else if (feed != null && feedsRequiringWebView.contains(feed.getId())) {

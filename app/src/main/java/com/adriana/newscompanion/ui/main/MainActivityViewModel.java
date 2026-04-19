@@ -1,5 +1,7 @@
 package com.adriana.newscompanion.ui.main;
 
+import android.util.Log;
+
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
 import androidx.lifecycle.ViewModel;
@@ -9,6 +11,7 @@ import com.adriana.newscompanion.data.entry.EntryRepository;
 import com.adriana.newscompanion.data.feed.Feed;
 import com.adriana.newscompanion.data.feed.FeedRepository;
 import com.adriana.newscompanion.data.sharedpreferences.SharedPreferencesRepository;
+import com.adriana.newscompanion.service.tts.TtsExtractor;
 
 import java.util.List;
 
@@ -94,4 +97,11 @@ public class MainActivityViewModel extends ViewModel {
         sharedPreferencesRepository.setNight(isNight);
     }
 
+    @Inject
+    TtsExtractor ttsExtractor;
+
+    public void triggerExtractionAfterImport() {
+        Log.e("PIPELINE_FIX", "🚀 ViewModel triggering extraction");
+        ttsExtractor.extractAllEntries();
+    }
 }

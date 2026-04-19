@@ -361,7 +361,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        ttsExtractor.prioritize();
+        //ttsExtractor.prioritize();
         Log.e("TRACE", "🚀 onCreate STARTED");
         webViewViewModel = new ViewModelProvider(this).get(WebViewViewModel.class);
         initializeTranslationObservers();

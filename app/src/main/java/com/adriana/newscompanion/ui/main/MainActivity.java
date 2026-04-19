@@ -4,6 +4,8 @@ import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 import android.util.Xml;
 import android.view.View;
@@ -192,6 +194,12 @@ public class MainActivity extends AppCompatActivity {
                                         eventType = parser.next();
                                     }
                                     Toast.makeText(getApplicationContext(), "Feeds imported successfully", Toast.LENGTH_SHORT).show();
+                                    Log.e("PIPELINE_FIX", "Trigger extraction AFTER IMPORT");
+
+                                    // 🔥 VERY IMPORTANT
+                                    new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                                        mainActivityViewModel.triggerExtractionAfterImport();
+                                    }, 1000);
                                 } catch (IOException | XmlPullParserException e) {
                                     e.printStackTrace();
                                     Toast.makeText(getApplicationContext(), "Import failed", Toast.LENGTH_SHORT).show();
