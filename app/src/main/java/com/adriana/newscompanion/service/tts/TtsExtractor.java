@@ -443,7 +443,7 @@ public class TtsExtractor {
                         try {
                             int length = Integer.parseInt(result.replace("\"", ""));
 
-                            if (length > 500) {
+                            if (length > 400) {
                                 Log.e("WEBVIEW_READY", "✅ READY → extract");
                                 extractHtml(view);
                             } else {

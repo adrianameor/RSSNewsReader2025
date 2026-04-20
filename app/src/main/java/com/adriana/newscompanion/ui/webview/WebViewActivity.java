@@ -488,20 +488,27 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     }
 
     private void loadEntryContent() {
-        Log.e("TRACE", "🔥 loadEntryContent() CALLED");
         String htmlToLoad = "";
         String titleToDisplay = "";
         String contentForTts = "";
         String langForTts = "en"; // safe default
         long entryId = getIntent().getLongExtra("entry_id", -1);
-        Log.e("TRACE", "entryId = " + entryId);
         if (entryId == -1) { makeSnackbar("Error: No article ID provided."); finish(); return; }
         currentId = entryId;
         currentPlaylistIndex = ttsPlaylist.indexOf(currentId);
 
         EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
-        Log.e("TRACE", "entryInfo = " + entryInfo);
         if (entryInfo == null) { makeSnackbar("Error: Could not load article data."); finish(); return; }
+        if (entryInfo.getContent() == null || entryInfo.getContent().trim().isEmpty()) {
+            Log.e("SAFE_GUARD", "❌ No content → force browser mode");
+
+            webView.loadUrl(entryInfo.getEntryLink());
+
+            browserButton.setVisible(false);
+            offlineButton.setVisible(false);
+
+            return;
+        }
 
         currentLink = entryInfo.getEntryLink();
         feedId = entryInfo.getFeedId();
@@ -665,7 +672,11 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             bookmarkButton.setIcon(ContextCompat.getDrawable(this, R.drawable.ic_bookmark_filled));
         }
 
-        sharedPreferencesRepository.setCurrentTtsContent(contentForTts);
+        if (contentForTts != null && !contentForTts.trim().isEmpty()) {
+            sharedPreferencesRepository.setCurrentTtsContent(contentForTts);
+        } else {
+            Log.e("SAFE_GUARD", "❌ Skip TTS: no content");
+        }
         sharedPreferencesRepository.setCurrentTtsLang(langForTts);
 
         sharedPreferencesRepository.setCurrentReadingEntryId(currentId);
@@ -871,14 +882,23 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 return true;
 
             case R.id.openInBrowser:
+                if (sharedPreferencesRepository.getWebViewMode(currentId)) {
+                    Log.e("MODE_DEBUG", "Already in browser mode → ignore click");
+                    return true;
+                }
                 browserButton.setVisible(false);
                 offlineButton.setVisible(true);
                 sharedPreferencesRepository.setWebViewMode(currentId, true);
+                webView.stopLoading();
                 webView.loadUrl(currentLink);
                 hideFakeLoading();
                 return true;
 
             case R.id.exitBrowser:
+                if (!sharedPreferencesRepository.getWebViewMode(currentId)) {
+                    Log.e("MODE_DEBUG", "Already in offline mode → ignore click");
+                    return true;
+                }
                 sharedPreferencesRepository.setWebViewMode(currentId, false);
                 loadEntryContent();
                 offlineButton.setVisible(false);
