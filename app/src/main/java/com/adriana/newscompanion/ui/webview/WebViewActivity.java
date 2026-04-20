@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.graphics.Bitmap;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.support.v4.media.MediaBrowserCompat;
@@ -520,6 +521,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 && (entryInfo.getContent() == null || entryInfo.getContent().trim().isEmpty())) {
 
             webView.loadUrl(currentLink);
+
             if (getSupportActionBar() != null) {
                 getSupportActionBar().setTitle(entryInfo.getEntryTitle());
             }
@@ -816,6 +818,10 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         doc.head().append(webViewViewModel.getStyle());
 
         EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
+
+        Log.e("ENTRY_DEBUG", "currentId = " + currentId);
+        Log.e("ENTRY_DEBUG", "entryInfo = " + entryInfo);
+        Log.e("ENTRY_DEBUG", "entryInfo.id = " + (entryInfo != null ? entryInfo.getEntryId() : "NULL"));
         if (entryInfo != null && !doc.html().contains("class=\"entry-header\"")) {
             doc.selectFirst("body").prepend(
                     webViewViewModel.getHtml(
@@ -1814,6 +1820,22 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         @Override
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
+
+            if (url == null || url.startsWith("data:")) {
+                return;
+            }
+
+            Log.e("COOKIE_SAVE", "REAL URL = " + url);
+
+            String cookie = android.webkit.CookieManager
+                    .getInstance()
+                    .getCookie(url);
+
+            Log.e("COOKIE_SAVE", "COOKIE = " + cookie);
+
+            if (cookie != null) {
+                sharedPreferencesRepository.setSavedCookie(url, cookie);
+            }
 
             String titleFromIntent = getIntent().getStringExtra("entry_title");
 

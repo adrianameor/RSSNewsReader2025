@@ -3,6 +3,10 @@ package com.adriana.newscompanion.data.sharedpreferences;
 import android.content.Context;
 import android.content.SharedPreferences;
 import androidx.preference.PreferenceManager;
+
+import java.util.HashMap;
+import java.util.Map;
+
 import javax.inject.Inject;
 import dagger.hilt.android.qualifiers.ApplicationContext;
 
@@ -21,6 +25,27 @@ public class SharedPreferencesRepository {
 
     public int getJobPeriodic() {
         return Integer.parseInt(sharedPreferences.getString("jobPeriodic", "0"));
+    }
+
+    public void setSavedCookie(String url, String cookie) {
+        getEditor().putString("cookie_" + url, cookie).commit();
+    }
+
+    public String getSavedCookie(String url) {
+        return sharedPreferences.getString("cookie_" + url, null);
+    }
+
+    public Map<String, ?> getAllCookies() {
+        Map<String, ?> all = sharedPreferences.getAll();
+        Map<String, String> cookies = new HashMap<>();
+
+        for (Map.Entry<String, ?> entry : all.entrySet()) {
+            if (entry.getKey().startsWith("cookie_")) {
+                cookies.put(entry.getKey().replace("cookie_", ""), (String) entry.getValue());
+            }
+        }
+
+        return cookies;
     }
 
     public void setInitialJobPeriodic() {

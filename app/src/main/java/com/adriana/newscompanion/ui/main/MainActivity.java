@@ -9,6 +9,7 @@ import android.os.Looper;
 import android.util.Log;
 import android.util.Xml;
 import android.view.View;
+import android.webkit.WebView;
 import android.widget.Toast;
 
 import com.adriana.newscompanion.R;
@@ -51,6 +52,7 @@ import java.nio.charset.StandardCharsets;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.List;
+import java.util.Map;
 
 import javax.inject.Inject;
 
@@ -291,9 +293,28 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void restoreCookies() {
+        android.webkit.CookieManager cookieManager = android.webkit.CookieManager.getInstance();
+
+        cookieManager.setAcceptCookie(true);
+        cookieManager.setAcceptThirdPartyCookies(new WebView(this), true);
+
+        Map<String, ?> cookies = sharedPreferencesRepository.getAllCookies();
+
+        for (Map.Entry<String, ?> entry : cookies.entrySet()) {
+            String url = entry.getKey();
+            String cookie = (String) entry.getValue();
+
+            cookieManager.setCookie(url, cookie);
+
+            Log.e("COOKIE_RESTORE", "Restored cookie for " + url);
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        restoreCookies();
         binding = ActivityMainBinding.inflate(getLayoutInflater());
 
         mainActivityViewModel = new ViewModelProvider(this).get(MainActivityViewModel.class);

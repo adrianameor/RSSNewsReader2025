@@ -52,6 +52,7 @@ import io.reactivex.rxjava3.disposables.CompositeDisposable;
 
 @Singleton
 public class TtsExtractor {
+    private String webViewExpectedUrl = null;
 
     private final CompositeDisposable disposables = new CompositeDisposable();
     private final String TAG = TtsExtractor.class.getSimpleName();
@@ -84,6 +85,7 @@ public class TtsExtractor {
     private Runnable watchdogRunnable;
     private int loadCounter = 0;
     private final Object aiLock = new Object();
+    private long webViewSafeId = -1;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Inject
@@ -97,7 +99,6 @@ public class TtsExtractor {
         this.sharedPreferencesRepository = sharedPreferencesRepository;
         this.translationRepository = translationRepository;
         initWebView();
-        Log.e("INSTANCE_CHECK", "Extractor CREATED: " + this.hashCode());
     }
 
     private void initWebView() {
@@ -116,7 +117,6 @@ public class TtsExtractor {
     }
 
     private void extractWithHttp(Entry entry) {
-        Log.e("PROOF", "STEP 3A: HTTP EXTRACTION START ID = " + currentIdInProgress);
         startWatchdog(30000);
 
         new Thread(() -> {
@@ -182,18 +182,16 @@ public class TtsExtractor {
                         failedIds.add(currentIdInProgress);
                     } else {
                         String contentWithTitle = currentTitle + delimiter + finalFullText;
-
-                        // 🔥 ADD HERE
                         if (currentIdInProgress == -1) {
-                            Log.e("SAFE_GUARD", "❌ Skip save: invalid ID");
                             return;
                         }
 
-                        entryRepository.updateOriginalHtml(doc.html(), currentIdInProgress); // 🔥 ADD THIS
-                        entryRepository.updateHtml(doc.html(), currentIdInProgress);
-                        entryRepository.updateContent(contentWithTitle, currentIdInProgress);
-                        Log.e("PIPELINE_TRACE", "✅ CONTENT SAVED ID = " + currentIdInProgress);
-                        Log.e("PIPELINE_TRACE", "🔥 trigger AI for ID = " + currentIdInProgress);
+                        long safeId = entry.getId();
+
+                        entryRepository.updateOriginalHtml(doc.html(), safeId);
+                        entryRepository.updateHtml(doc.html(), safeId);
+                        entryRepository.updateContent(contentWithTitle, safeId);
+                        webViewExpectedUrl = null;
                         runAiPipelineNow();
                     }
                 } else {
@@ -217,15 +215,28 @@ public class TtsExtractor {
     }
 
     private void extractWithWebView(Entry entry) {
-        Log.e("PROOF", "STEP 3B: WEBVIEW EXTRACTION START ID = " + currentIdInProgress);
+        webViewSafeId = entry.getId();
+        webViewExpectedUrl = entry.getLink();
         String cookie = android.webkit.CookieManager.getInstance().getCookie(entry.getLink());
         Log.e("COOKIE_DEBUG", "Cookie for " + entry.getLink() + " = " + cookie);
-        ContextCompat.getMainExecutor(context).execute(() -> webView.loadUrl(entry.getLink()));
+        Log.e("COOKIE_BEFORE_LOAD", "Cookie = " +
+                CookieManager.getInstance().getCookie(entry.getLink()));
+        ContextCompat.getMainExecutor(context).execute(() -> {
+
+            String url = entry.getLink();
+
+            Log.e("COOKIE_FORCE", "Applying cookie to WebView: " + cookie);
+
+            if (cookie != null) {
+                CookieManager.getInstance().setCookie(url, cookie);
+            }
+
+            webView.loadUrl(url);
+        });
         startWatchdog(45000);
     }
 
     public void extractAllEntries() {
-        Log.e("PIPELINE_TRACE", "🔥 ENTER extractAllEntries()");
         if (extractionInProgress) return;
 
         if (loadCounter >= 100) {
@@ -261,13 +272,12 @@ public class TtsExtractor {
 
                 entryRepository.updateContent("", entry.getId());
 
-                continue; // 🔥 SKIP THIS ENTRY
+                continue;
             }
 
-            break; // ✅ VALID ENTRY FOUND
+            break;
         }
 
-// ✅ NOW ENTRY IS GUARANTEED NOT NULL
         Log.e("PROOF", "STEP 2: ENTRY FOUND ID = " + entry.getId());
 
         extractionInProgress = true;
@@ -416,79 +426,141 @@ public class TtsExtractor {
 
     public class WebClient extends WebViewClient {
         private final Handler handler = new Handler();
+
+        private void checkContentReady(WebView view, int attempt) {
+            if (attempt > 10) {
+                Log.e("WEBVIEW_FAIL", "❌ Gave up waiting → force extract");
+                extractHtml(view);
+                return;
+            }
+
+            view.evaluateJavascript(
+                    "(function() {" +
+                            "  let article = document.querySelector('article');" +
+                            "  return article ? article.innerText.length : 0;" +
+                            "})();",
+                    result -> {
+                        try {
+                            int length = Integer.parseInt(result.replace("\"", ""));
+
+                            if (length > 500) {
+                                Log.e("WEBVIEW_READY", "✅ READY → extract");
+                                extractHtml(view);
+                            } else {
+                                Log.e("WEBVIEW_WAIT", "⏳ retry " + attempt);
+                                new Handler(Looper.getMainLooper())
+                                        .postDelayed(() -> checkContentReady(view, attempt + 1), 500);
+                            }
+
+                        } catch (Exception e) {
+                            new Handler(Looper.getMainLooper())
+                                    .postDelayed(() -> checkContentReady(view, attempt + 1), 500);
+                        }
+                    }
+            );
+        }
+
+        private void extractHtml(WebView view) {
+            view.evaluateJavascript(
+                    "(function() {return document.getElementsByTagName('html')[0].outerHTML;})();",
+                    value -> {
+                        JsonReader reader = new JsonReader(new StringReader(value));
+                        reader.setLenient(true);
+                        StringBuilder contentCollector = new StringBuilder();
+                        try {
+                            if (reader.peek() == JsonToken.STRING) {
+                                String html = reader.nextString();
+
+                                Log.e("HTML_SIZE", "WebView HTML length = " + (html != null ? html.length() : 0));
+                                if (html != null) {
+                                    Readability4JExtended readability4J = new Readability4JExtended(currentLink, html);
+                                    Article article = readability4J.parse();
+                                    if (article.getContentWithUtf8Encoding() != null) {
+                                        Document doc = Jsoup.parse(article.getContentWithUtf8Encoding());
+                                        doc.select("h1").remove();
+                                        doc.select("img").attr("style", "border-radius: 5px; max-width: 100%; max-height: 600px; height: auto; width: auto; object-fit: contain; margin-left:0");
+                                        doc.select("figure").attr("style", "width: 100%; max-height: 650px; overflow: hidden; margin: 1em 0; margin-left:0");
+                                        doc.select("iframe").attr("style", "width: 100%; margin-left:0");
+
+                                        List<String> tags = Arrays.asList("h2", "h3", "h4", "h5", "h6", "p", "td", "pre", "th", "li", "figcaption", "blockquote", "section");
+                                        for (Element element : doc.getAllElements()) {
+                                            if (tags.contains(element.tagName())) {
+                                                boolean hasTagChild = false;
+                                                for (Element child : element.children())
+                                                    if (tags.contains(child.tagName()))
+                                                        hasTagChild = true;
+                                                if (!hasTagChild) {
+                                                    String text = element.text().trim();
+                                                    if (text.length() > 1) {
+                                                        if (contentCollector.length() > 0)
+                                                            contentCollector.append(delimiter);
+                                                        contentCollector.append(text);
+                                                    } else element.remove();
+                                                }
+                                            }
+                                        }
+                                        String finalFullText = contentCollector.toString();
+                                        if (finalFullText.length() < 200 || finalFullText.toLowerCase().contains("please enable javascript")) {
+                                            entryRepository.updateContent("", currentIdInProgress);
+                                        } else {
+                                            String contentWithTitle = currentTitle + delimiter + finalFullText;
+
+                                            // 🔥 ADD HERE
+                                            if (currentIdInProgress == -1) {
+                                                Log.e("SAFE_GUARD", "❌ Skip save: invalid ID");
+                                                return;
+                                            }
+
+                                            if (webViewSafeId == -1) {
+                                                Log.e("SAFE_GUARD", "❌ WebView save skipped (invalid ID)");
+                                                return;
+                                            }
+
+                                            entryRepository.updateOriginalHtml(doc.html(), webViewSafeId);
+                                            entryRepository.updateHtml(doc.html(), webViewSafeId);
+                                            entryRepository.updateContent(contentWithTitle, webViewSafeId);
+
+                                            Log.e("PIPELINE_TRACE", "✅ CONTENT SAVED ID = " + currentIdInProgress);
+                                            Log.e("PIPELINE_TRACE", "🔥 trigger AI for ID = " + currentIdInProgress);
+                                            runAiPipelineNow();
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (Exception e) {
+                            failedIds.add(currentIdInProgress);
+                        } finally {
+                            cancelWatchdog();
+                            if (webViewCallback != null) {
+                                webViewCallback.finishedSetup();
+                                webViewCallback = null;
+                            }
+                            resetFlagsAndContinue();
+                        }
+                    }
+            );
+        }
+
         @Override
-        public boolean shouldOverrideUrlLoading(WebView view, String url) { view.loadUrl(url); return true; }
+        public boolean shouldOverrideUrlLoading(WebView view, String url) {
+            if (url == null) return false;
+
+            Log.e("WEBVIEW_NAV", "Loading URL = " + url);
+
+            return false;
+        }
 
         @Override
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
+            if (webViewExpectedUrl == null || !url.equals(webViewExpectedUrl)) {
+                Log.e("WEBVIEW_DEBUG", "❌ IGNORE MISMATCH URL = " + url +
+                        " | expected = " + webViewExpectedUrl);
+                return;
+            }
             if (extractionInProgress) {
-                handler.postDelayed(() -> webView.evaluateJavascript("(function() {return document.getElementsByTagName('html')[0].outerHTML;})();", value -> {
-                    JsonReader reader = new JsonReader(new StringReader(value));
-                    reader.setLenient(true);
-                    StringBuilder contentCollector = new StringBuilder();
-                    try {
-                        if (reader.peek() == JsonToken.STRING) {
-                            String html = reader.nextString();
-
-                            Log.e("HTML_SIZE", "WebView HTML length = " + (html != null ? html.length() : 0));
-                            if (html != null) {
-                                Readability4JExtended readability4J = new Readability4JExtended(currentLink, html);
-                                Article article = readability4J.parse();
-                                if (article.getContentWithUtf8Encoding() != null) {
-                                    Document doc = Jsoup.parse(article.getContentWithUtf8Encoding());
-                                    doc.select("h1").remove();
-                                    doc.select("img").attr("style", "border-radius: 5px; max-width: 100%; max-height: 600px; height: auto; width: auto; object-fit: contain; margin-left:0");
-                                    doc.select("figure").attr("style", "width: 100%; max-height: 650px; overflow: hidden; margin: 1em 0; margin-left:0");
-                                    doc.select("iframe").attr("style", "width: 100%; margin-left:0");
-
-                                    List<String> tags = Arrays.asList("h2", "h3", "h4", "h5", "h6", "p", "td", "pre", "th", "li", "figcaption", "blockquote", "section");
-                                    for (Element element : doc.getAllElements()) {
-                                        if (tags.contains(element.tagName())) {
-                                            boolean hasTagChild = false;
-                                            for (Element child : element.children()) if (tags.contains(child.tagName())) hasTagChild = true;
-                                            if (!hasTagChild) {
-                                                String text = element.text().trim();
-                                                if (text.length() > 1) {
-                                                    if (contentCollector.length() > 0) contentCollector.append(delimiter);
-                                                    contentCollector.append(text);
-                                                } else element.remove();
-                                            }
-                                        }
-                                    }
-                                    String finalFullText = contentCollector.toString();
-                                    if (finalFullText.length() < 200 || finalFullText.toLowerCase().contains("please enable javascript")) {
-                                        entryRepository.updateContent("", currentIdInProgress);
-                                    } else {
-                                        String contentWithTitle = currentTitle + delimiter + finalFullText;
-
-                                        // 🔥 ADD HERE
-                                        if (currentIdInProgress == -1) {
-                                            Log.e("SAFE_GUARD", "❌ Skip save: invalid ID");
-                                            return;
-                                        }
-
-                                        entryRepository.updateOriginalHtml(doc.html(), currentIdInProgress); // 🔥 ADD THIS
-                                        entryRepository.updateHtml(doc.html(), currentIdInProgress);
-                                        entryRepository.updateContent(contentWithTitle, currentIdInProgress);
-                                        Log.e("PIPELINE_TRACE", "✅ CONTENT SAVED ID = " + currentIdInProgress);
-                                        Log.e("PIPELINE_TRACE", "🔥 trigger AI for ID = " + currentIdInProgress);
-                                        runAiPipelineNow();
-                                    }
-                                }
-                            }
-                        }
-                    } catch (Exception e) {
-                        failedIds.add(currentIdInProgress);
-                    } finally {
-                        cancelWatchdog();
-                        if (webViewCallback != null) {
-                            webViewCallback.finishedSetup();
-                            webViewCallback = null;
-                        }
-                        resetFlagsAndContinue();
-                    }
-                }), delayTime * 1000L);
+                Log.e("WEBVIEW_DEBUG", "onPageFinished URL = " + url + " | currentId = " + currentIdInProgress);
+                handler.postDelayed(() -> checkContentReady(view, 0), delayTime * 1000L);
             }
             Log.e(TAG, "🌐 WebView finished loading: " + url);
         }
@@ -506,7 +578,7 @@ public class TtsExtractor {
 
         if (genreIds == null || genreIds.isEmpty()) {
             Log.e("SAFE_GUARD", "⚠️ playlist is null or empty");
-            return list; // 🔥 RETURN EMPTY LIST
+            return list;
         }
 
         String[] array = genreIds.split(",");
@@ -543,7 +615,7 @@ public class TtsExtractor {
                         String html;
 
                         if (entry.isAiCleaned() && entry.getHtml() != null) {
-                            html = entry.getHtml(); // ✅ cleaned HTML first
+                            html = entry.getHtml();
                         } else {
                             html = entry.getOriginalHtml();
                         }
@@ -575,8 +647,6 @@ public class TtsExtractor {
 
                                     entryRepository.updateContent(finalContent, entry.getId());
                                 }
-                                Log.e("CLEAN_DEBUG", "✅ DONE CLEAN ID = " + entry.getId());
-                                Log.e("CLEAN_DEBUG", "RESULT (first 100) = " + cleanedHtml.substring(0, Math.min(100, cleanedHtml.length())));
 
                             } catch (Exception ignored) {}
 
