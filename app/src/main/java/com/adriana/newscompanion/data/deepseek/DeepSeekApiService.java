@@ -28,6 +28,12 @@ public interface DeepSeekApiService {
             @Body CleanArticleRequest request
     );
 
+    @POST("v1/chat/completions")
+    Single<DeepSeekResponse> multiTask(
+            @Header("Authorization") String apiKey,
+            @Body MultiTaskRequest request
+    );
+
     class DeepSeekRequest {
         public String model = "deepseek-coder";
         public List<Message> messages;
@@ -148,5 +154,62 @@ public interface DeepSeekApiService {
 
     class Choice {
         public Message message;
+    }
+
+    class MultiTaskRequest {
+        public String model = "deepseek-chat";
+        public List<Message> messages;
+        public double temperature = 0.3;
+
+        public MultiTaskRequest(String html, boolean doClean, boolean doTranslate, boolean doSummarize, String targetLang) {
+
+            StringBuilder prompt = new StringBuilder();
+
+            prompt.append("You are a professional article processor.\n\n");
+
+            prompt.append("Follow these steps STRICTLY:\n");
+
+            if (doClean) {
+                prompt.append("STEP 1: Act as an aggressive HTML cleaner; remove all clutter, including navigation, sidebars, social widgets, metadata, and any elements containing \"Related,\" \"Subscribe,\" \"Share,\" or \"Comment\" or \"FOTO\" keywords.  If you see ANY of the removal keywords, DELETE that entire element. Keep only the core article paragraphs, headings, essential images, and lists, deleting any doubtful elements to ensure a purely content-focused output. Return only the cleaned, valid HTML with no explanation.\n");
+            }
+
+            prompt.append("STEP 2: Use the FINAL HTML (cleaned if step 1 was done, otherwise original).\n");
+
+            if (doTranslate) {
+                prompt.append("- Translate FULL HTML (don't miss any single word) into ").append(targetLang).append(" including title.\n");
+            }
+
+            if (doSummarize) {
+                prompt.append("- Generate a summary in ").append(targetLang).append(".\n");
+            }
+
+            prompt.append("\nIMPORTANT:\n");
+            prompt.append("- Return ONLY JSON\n");
+            prompt.append("- Do NOT explain\n");
+            prompt.append("- Ensure valid JSON\n\n");
+
+            prompt.append("OUTPUT FORMAT:\n{\n");
+
+            if (doClean) {
+                prompt.append("\"cleaned_html\": \"...\",\n");
+            }
+
+            if (doTranslate) {
+                prompt.append("\"translated_html\": \"...\",\n");
+            }
+
+            if (doSummarize) {
+                prompt.append("\"summary\": \"...\"\n");
+            }
+
+            prompt.append("}\n\n");
+
+            prompt.append("HTML:\n").append(html);
+
+            this.messages = List.of(
+                    new Message("system", "Return ONLY JSON."),
+                    new Message("user", prompt.toString())
+            );
+        }
     }
 }

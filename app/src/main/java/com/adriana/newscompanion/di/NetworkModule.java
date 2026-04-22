@@ -32,6 +32,7 @@ public class NetworkModule {
                 .readTimeout(60, TimeUnit.SECONDS)
                 .writeTimeout(60, TimeUnit.SECONDS)
                 .addInterceptor(logging)
+                .protocols(java.util.Collections.singletonList(okhttp3.Protocol.HTTP_1_1))
                 .build();
     }
 

@@ -620,15 +620,95 @@ public class TtsExtractor {
                             html = entry.getOriginalHtml();
                         }
                         if (html == null || html.isEmpty()) continue;
+                        int length = html.length();
+                        boolean useSingleCall = length < 15000;
 
                         String plainText = textUtil.extractHtmlContent(html, delimiter);
 
                         String text = plainText;
 
+                        boolean singleCallSuccess = false;
+
+                        if (useSingleCall) {
+                            try {
+                                Log.e("AI_SINGLE", "🚀 USING SINGLE CALL ID = " + entry.getId());
+
+                                String json = translationRepository.processMultiTask(
+                                                html,
+                                                doClean,
+                                                doTranslate,
+                                                doSummarize,
+                                                sharedPreferencesRepository.getDefaultTranslationLanguage()
+                                        ).timeout(90, java.util.concurrent.TimeUnit.SECONDS)
+                                        .blockingGet();
+
+                                Log.e("AI_JSON_RAW", json);
+
+                                if (json != null && !json.isEmpty()) {
+
+                                    json = json.trim();
+
+                                    if (json.startsWith("```")) {
+                                        json = json.replace("```json", "")
+                                                .replace("```", "")
+                                                .trim();
+                                    }
+
+                                    org.json.JSONObject obj = new org.json.JSONObject(json);
+
+                                    if (doClean && obj.has("cleaned_html")) {
+                                        String cleaned = obj.getString("cleaned_html");
+                                        entryRepository.updateHtml(cleaned, entry.getId());
+
+                                        String cleanedText = textUtil.extractHtmlContent(cleaned, delimiter);
+                                        entryRepository.updateContent(entry.getTitle() + delimiter + cleanedText, entry.getId());
+
+                                        entryRepository.markAsAiCleaned(entry.getId());
+                                    }
+
+                                    if (doSummarize && obj.has("summary")) {
+                                        entryRepository.updateSummary(obj.getString("summary"), entry.getId());
+                                        entryRepository.markAsAiSummarized(entry.getId(), false);
+                                    }
+
+                                    if (doTranslate && obj.has("translated_html")) {
+                                        String translatedHtml = obj.getString("translated_html");
+
+                                        String textTranslated = textUtil.extractHtmlContent(translatedHtml, delimiter);
+
+                                        org.jsoup.nodes.Document doc = org.jsoup.Jsoup.parse(translatedHtml);
+                                        String translatedTitle = doc.select("h1").text();
+
+                                        if (translatedTitle == null || translatedTitle.isEmpty()) {
+                                            translatedTitle = entry.getTitle();
+                                        }
+
+                                        entryRepository.updateTranslatedText(
+                                                translatedTitle + delimiter + textTranslated,
+                                                entry.getId()
+                                        );
+
+                                        entryRepository.updateTranslatedTitle(translatedTitle, entry.getId());
+                                    }
+
+                                    boolean hasClean = !doClean || obj.has("cleaned_html");
+                                    boolean hasSummary = !doSummarize || obj.has("summary");
+                                    boolean hasTranslate = !doTranslate || obj.has("translated_html");
+
+                                    singleCallSuccess = hasClean && hasSummary && hasTranslate;
+                                }
+
+                            } catch (Exception e) {
+                                Log.e("AI_SINGLE_FAIL", "Fallback to old pipeline", e);
+                            }
+                        }
+
+                        // 🔥 ADD THIS BLOCK
+                        if (singleCallSuccess) {
+                            continue; // ✅ STOP fallback pipeline
+                        }
                         // CLEAN
                         if (doClean) {
-                            Log.e("CLEAN_DEBUG", "🔥 START CLEAN ID = " + entry.getId());
-                            Log.e("CLEAN_DEBUG", "FLAG doClean = " + doClean);
                             try {
                                 String cleanedHtml = translationRepository
                                         .cleanArticleHtml(html)

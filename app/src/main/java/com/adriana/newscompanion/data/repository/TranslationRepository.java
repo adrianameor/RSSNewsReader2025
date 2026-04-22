@@ -98,4 +98,28 @@ public class TranslationRepository {
                 })
                 .onErrorReturnItem(originalHtml); // Fallback on error
     }
+
+    public Single<String> processMultiTask(String html,
+                                           boolean doClean,
+                                           boolean doTranslate,
+                                           boolean doSummarize,
+                                           String targetLang) {
+
+        DeepSeekApiService.MultiTaskRequest request =
+                new DeepSeekApiService.MultiTaskRequest(
+                        html,
+                        doClean,
+                        doTranslate,
+                        doSummarize,
+                        targetLang
+                );
+
+        return deepSeekApiService.multiTask("Bearer " + DEEPSEEK_API_KEY, request)
+                .map(response -> {
+                    if (response != null && response.choices != null && !response.choices.isEmpty()) {
+                        return response.choices.get(0).message.content;
+                    }
+                    return null;
+                });
+    }
 }

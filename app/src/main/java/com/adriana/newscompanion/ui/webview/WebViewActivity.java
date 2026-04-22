@@ -551,6 +551,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
         boolean autoTranslateOn = sharedPreferencesRepository.getAutoTranslate();
         boolean translationExists = entryInfo.getTranslated() != null && !entryInfo.getTranslated().trim().isEmpty();
+        Log.e("UI_DEBUG", "translated = " + entryInfo.getTranslated());
         boolean summaryExists = entryInfo.getSummary() != null && !entryInfo.getSummary().trim().isEmpty();
 
         if (isInitialLoad) {
