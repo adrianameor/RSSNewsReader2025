@@ -2,6 +2,8 @@ package com.adriana.newscompanion.data.sharedpreferences;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.util.Log;
+
 import androidx.preference.PreferenceManager;
 
 import java.util.HashMap;
@@ -29,6 +31,11 @@ public class SharedPreferencesRepository {
 
     public void setSavedCookie(String url, String cookie) {
         getEditor().putString("cookie_" + url, cookie).commit();
+        Log.e("SP_DEBUG", "[SAVE] SP instance = " + sharedPreferences.toString());
+        Log.e("SP_DEBUG", "[SAVE] All keys = " + sharedPreferences.getAll().keySet());
+        Log.e("COOKIE_FLOW", "WRITE CALLED → key = cookie_" + url);
+        String check = sharedPreferences.getString("cookie_" + url, null);
+        Log.e("COOKIE_FLOW", "VERIFY WRITE → " + check);
     }
 
     public String getSavedCookie(String url) {
@@ -36,6 +43,9 @@ public class SharedPreferencesRepository {
     }
 
     public Map<String, ?> getAllCookies() {
+        Log.e("SP_DEBUG", "[GET_ALL] SP instance = " + sharedPreferences.toString());
+        Log.e("SP_DEBUG", "[GET_ALL] All keys BEFORE FILTER = " + sharedPreferences.getAll().keySet());
+
         Map<String, ?> all = sharedPreferences.getAll();
         Map<String, String> cookies = new HashMap<>();
 

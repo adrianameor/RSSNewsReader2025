@@ -71,6 +71,38 @@ public class MainActivity extends AppCompatActivity {
     @Inject
     SharedPreferencesRepository sharedPreferencesRepository;
 
+    private void rehydrateCookies() {
+        android.webkit.CookieManager cookieManager = android.webkit.CookieManager.getInstance();
+        cookieManager.setAcceptCookie(true);
+
+        Map<String, ?> cookies = sharedPreferencesRepository.getAllCookies();
+        Log.e("SP_DEBUG", "[RESTORE] Cookies size = " + cookies.size());
+        Log.e("SP_DEBUG", "[RESTORE] Keys = " + cookies.keySet());
+
+        for (Map.Entry<String, ?> entry : cookies.entrySet()) {
+            String url = entry.getKey();
+            String cookieString = entry.getValue().toString();
+
+            Uri uri = Uri.parse(url);
+            String domain = uri.getScheme() + "://" + uri.getHost();
+
+            String[] cookiesArray = cookieString.split(";");
+
+            for (String singleCookie : cookiesArray) {
+                String cookieWithAttrs = singleCookie.trim()
+                        + "; domain=" + uri.getHost()
+                        + "; path=/";
+
+                cookieManager.setCookie(domain, cookieWithAttrs);
+
+                Log.e("COOKIE_RESTORE", "Restored full: " + cookieWithAttrs);
+                Log.e("COOKIE_RESTORE", "Restored part: " + singleCookie.trim());
+            }
+        }
+
+        cookieManager.flush();
+    }
+
     // Define the ActivityResultLauncher for importing OPML file
     private final ActivityResultLauncher<String[]> importOpmlLauncher = registerForActivityResult(
             new ActivityResultContracts.OpenMultipleDocuments(),
@@ -192,13 +224,25 @@ public class MainActivity extends AppCompatActivity {
                                             } catch (ParseException e) {
                                                 e.printStackTrace();
                                             }
+                                        } else if (eventType == XmlPullParser.START_TAG && parser.getName().equals("cookie")) {
+                                            String url = parser.getAttributeValue(null, "url");
+                                            String value = parser.getAttributeValue(null, "value");
+
+                                            if (url != null && value != null) {
+                                                Uri cookieUri = Uri.parse(url);
+                                                String domain = cookieUri.getScheme() + "://" + cookieUri.getHost();
+
+                                                sharedPreferencesRepository.setSavedCookie(domain, value);
+                                                Log.e("COOKIE_IMPORT", "Saved cookie for " + url);
+                                                Log.e("SP_DEBUG", "[IMPORT] domain = " + domain);
+                                            }
                                         }
                                         eventType = parser.next();
                                     }
                                     Toast.makeText(getApplicationContext(), "Feeds imported successfully", Toast.LENGTH_SHORT).show();
                                     Log.e("PIPELINE_FIX", "Trigger extraction AFTER IMPORT");
 
-                                    // 🔥 VERY IMPORTANT
+                                    rehydrateCookies();
                                     new Handler(Looper.getMainLooper()).postDelayed(() -> {
                                         mainActivityViewModel.triggerExtractionAfterImport();
                                     }, 1000);
@@ -240,6 +284,23 @@ public class MainActivity extends AppCompatActivity {
                             serializer.attribute(null, "defaultTranslationLanguage", sharedPreferencesRepository.getDefaultTranslationLanguage());
                             serializer.attribute(null, "translationMethod", sharedPreferencesRepository.getTranslationMethod());
                             serializer.endTag(null, "setting");
+                            Map<String, ?> cookies = sharedPreferencesRepository.getAllCookies();
+                            Log.e("SP_DEBUG", "[EXPORT] Cookies size = " + cookies.size());
+                            Log.e("SP_DEBUG", "[EXPORT] Keys = " + cookies.keySet());
+
+                            serializer.startTag(null, "cookies");
+
+                            for (Map.Entry<String, ?> entry : cookies.entrySet()) {
+                                serializer.startTag(null, "cookie");
+                                Uri uri = Uri.parse(entry.getKey());
+                                String domain = uri.getScheme() + "://" + uri.getHost();
+
+                                serializer.attribute(null, "url", domain);
+                                serializer.attribute(null, "value", entry.getValue().toString());
+                                serializer.endTag(null, "cookie");
+                            }
+
+                            serializer.endTag(null, "cookies");
                             List<Feed> feeds = mainActivityViewModel.getAllStaticFeeds();
                             @SuppressLint("SimpleDateFormat") SimpleDateFormat formatter = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
                             for (Feed feed : feeds) {
@@ -314,7 +375,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        restoreCookies();
+        //restoreCookies();
         binding = ActivityMainBinding.inflate(getLayoutInflater());
 
         mainActivityViewModel = new ViewModelProvider(this).get(MainActivityViewModel.class);

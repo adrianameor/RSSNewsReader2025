@@ -18,6 +18,7 @@ import android.util.Log;
 import android.view.KeyEvent;
 import android.view.MenuItem;
 import android.view.View;
+import android.webkit.CookieManager;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -363,6 +364,12 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         //ttsExtractor.prioritize();
+        android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+
+        String test = cm.getCookie("https://www.malaysiakini.com");
+
+        Log.e("COOKIE_TEST", "Before load → " + test);
+
         Log.e("TRACE", "🚀 onCreate STARTED");
         webViewViewModel = new ViewModelProvider(this).get(WebViewViewModel.class);
         initializeTranslationObservers();
@@ -844,7 +851,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             );
         }
 
-        webView.loadDataWithBaseURL("file///android_res/", doc.html(), "text/html", "UTF-8", null);
+        webView.loadDataWithBaseURL(currentLink, doc.html(), "text/html", "UTF-8", null);
 
         webView.postDelayed(() -> {
             int scrollX = sharedPreferencesRepository.getScrollX(currentId);
@@ -1090,6 +1097,13 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                     : WebSettings.FORCE_DARK_OFF);
         }
 
+        android.webkit.CookieManager cookieManager = android.webkit.CookieManager.getInstance();
+        cookieManager.setAcceptCookie(true);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            cookieManager.setAcceptThirdPartyCookies(webView, true);
+        }
+
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onProgressChanged(WebView view, int newProgress) {
@@ -1108,6 +1122,12 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             @Override
             public void onReceivedTitle(WebView view, String title) {
                 Log.d(TAG, "WebChromeClient: onReceivedTitle called with '" + title + "'. IGNORING IT.");
+            }
+        });
+        webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                Log.e("CLIENT_DEBUG", "🔥 BASIC CLIENT WORKS → " + url);
             }
         });
     }
@@ -1325,6 +1345,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         }
         ttsPlaylist.setPlaylist(playlistIds, currentId);
 
+        Log.e("CLIENT_DEBUG", "SETTING ReadingWebClient");
         webView.setWebViewClient(new ReadingWebClient());
 
         binding.nextArticleButton.setOnClickListener(new View.OnClickListener() {
@@ -1443,8 +1464,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     }
 
     private void switchPlayMode(long[] playlistIdsFromIntent) {
-        Log.d("TTS_QUEUE_FIX", "🎮 switchPlayMode() called");
-        
+        Log.e("CLIENT_DEBUG", "SETTING WebClient");
         webView.setWebViewClient(new WebClient());
         
         List<Long> playlistIds = new ArrayList<>();
@@ -1840,21 +1860,39 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         @Override
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
+            String after = CookieManager.getInstance().getCookie(url);
+            Log.e("COOKIE_TEST", "After load → " + after);
 
             if (url == null || url.startsWith("data:")) {
                 return;
             }
 
-            Log.e("COOKIE_SAVE", "REAL URL = " + url);
-
             String cookie = android.webkit.CookieManager
                     .getInstance()
                     .getCookie(url);
 
-            Log.e("COOKIE_SAVE", "COOKIE = " + cookie);
+            Log.e("COOKIE_FLOW", "URL = " + url);
+            Log.e("COOKIE_FLOW", "COOKIE RAW = " + cookie);
 
             if (cookie != null) {
-                sharedPreferencesRepository.setSavedCookie(url, cookie);
+                Uri uri = Uri.parse(url);
+                String host = uri.getHost();
+
+                if (host == null) {
+                    Log.e("COOKIE_FLOW", "❌ HOST NULL → SKIP SAVE");
+                    return;
+                }
+
+                String domain = uri.getScheme() + "://" + host;
+
+                Log.e("COOKIE_FLOW", "URL = " + url);
+                Log.e("COOKIE_FLOW", "COOKIE = " + cookie);
+                Log.e("COOKIE_FLOW", "DOMAIN = " + domain);
+
+                sharedPreferencesRepository.setSavedCookie(domain, cookie);
+                android.webkit.CookieManager.getInstance().flush();
+                Log.e("SP_DEBUG", "[WEBVIEW] Saved cookie for domain = " + domain);
+                Log.e("COOKIE_FLOW", "SAVED → cookie_" + domain);
             }
 
             String titleFromIntent = getIntent().getStringExtra("entry_title");
@@ -1875,6 +1913,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, String url) {
+            Log.e("CLIENT_DEBUG", "WebClient shouldOverrideUrlLoading HIT → " + url);
             view.loadUrl(url);
             return true;
         }
@@ -1918,6 +1957,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
         @Override
         public void onPageFinished(WebView view, String url) {
+            Log.e("CLIENT_DEBUG", "ReadingWebClient used");
             super.onPageFinished(view, url);
 
             String titleFromIntent = getIntent().getStringExtra("entry_title");
@@ -1938,6 +1978,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, String url) {
+            Log.e("CLIENT_DEBUG", "ReadingWebClient shouldOverrideUrlLoading HIT → " + url);
             view.loadUrl(url);
             return true;
         }
