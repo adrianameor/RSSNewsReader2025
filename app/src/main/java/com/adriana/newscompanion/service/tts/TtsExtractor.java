@@ -674,17 +674,23 @@ public class TtsExtractor {
                                     if (doTranslate && obj.has("translated_html")) {
                                         String translatedHtml = obj.getString("translated_html");
 
-                                        String textTranslated = textUtil.extractHtmlContent(translatedHtml, delimiter);
-
                                         org.jsoup.nodes.Document doc = org.jsoup.Jsoup.parse(translatedHtml);
                                         String translatedTitle = doc.select("h1").text();
+
+                                        if (translatedTitle == null || translatedTitle.isEmpty()) {
+                                            translatedTitle = translationRepository.translateText(
+                                                    entry.getTitle(),
+                                                    "auto",
+                                                    sharedPreferencesRepository.getDefaultTranslationLanguage()
+                                            ).blockingGet();
+                                        }
 
                                         if (translatedTitle == null || translatedTitle.isEmpty()) {
                                             translatedTitle = entry.getTitle();
                                         }
 
                                         entryRepository.updateTranslatedText(
-                                                translatedTitle + delimiter + textTranslated,
+                                                translatedHtml, // 🔥 STORE FULL HTML
                                                 entry.getId()
                                         );
 
@@ -703,10 +709,18 @@ public class TtsExtractor {
                             }
                         }
 
-                        // 🔥 ADD THIS BLOCK
                         if (singleCallSuccess) {
-                            continue; // ✅ STOP fallback pipeline
+
+                            // 🔥 RELOAD ENTRY AFTER DB UPDATE (THIS IS THE REAL FIX)
+                            entry = entryRepository.getEntryById(entry.getId());
+
+                            if (webViewCallback != null) {
+                                webViewCallback.finishedSetup(); // 🔥 triggers UI refresh
+                            }
+
+                            continue;
                         }
+
                         // CLEAN
                         if (doClean) {
                             try {
@@ -769,8 +783,12 @@ public class TtsExtractor {
 
                                     entryRepository.updateTranslatedTitle(translatedTitle, entry.getId());
 
-                                    String finalTranslated = translatedTitle + delimiter + translated;
-                                    entryRepository.updateTranslatedText(finalTranslated, entry.getId());
+                                    //String finalTranslated = translatedTitle + delimiter + translated;
+                                    //entryRepository.updateTranslatedText(finalTranslated, entry.getId());
+                                    entryRepository.updateTranslatedText(
+                                            "<p>" + translated.replace(delimiter, "</p><p>") + "</p>",
+                                            entry.getId()
+                                    );
                                 }
                                 Log.e("TRANSLATE_DEBUG", "✅ DONE ID = " + entry.getId());
                                 Log.e("TRANSLATE_DEBUG", "RESULT = " + translated);

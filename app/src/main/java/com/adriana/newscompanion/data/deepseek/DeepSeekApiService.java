@@ -170,7 +170,36 @@ public interface DeepSeekApiService {
             prompt.append("Follow these steps STRICTLY:\n");
 
             if (doClean) {
-                prompt.append("STEP 1: Act as an aggressive HTML cleaner; remove all clutter, including navigation, sidebars, social widgets, metadata, and any elements containing \"Related,\" \"Subscribe,\" \"Share,\" or \"Comment\" or \"FOTO\" keywords.  If you see ANY of the removal keywords, DELETE that entire element. Keep only the core article paragraphs, headings, essential images, and lists, deleting any doubtful elements to ensure a purely content-focused output. Return only the cleaned, valid HTML with no explanation.\n");
+                prompt.append("STEP 1: You are an AGGRESSIVE HTML cleaner. Your PRIMARY GOAL is to remove ALL clutter and keep ONLY the main article content. Be ruthless in removing anything that is not core article text.\\n\\n\" +\n" +
+                        "                    \"REMOVE COMPLETELY (delete the entire element and its content):\\n\" +\n" +
+                        "                    \"1. ANY text containing: 'Related', 'Read more', 'You might also like', 'More stories', 'Recommended', 'Trending'\\n\" +\n" +
+                        "                    \"2. ANY text containing: 'Subscribe', 'Sign up', 'Newsletter', 'Email', 'Log in', 'Sign in', 'Register', 'Join'\\n\" +\n" +
+                        "                    \"3. ANY text containing: 'Share', 'Tweet', 'Facebook', 'Twitter', 'LinkedIn', 'WhatsApp', 'Instagram'\\n\" +\n" +
+                        "                    \"4. ANY text containing: 'Image source', 'Image caption', 'Photo caption', 'Getty Images', 'Reuters', 'AP Photo', 'AFP', 'Photo by', 'Image credit', 'Photograph:'\\n\" +\n" +
+                        "                    \"5. ANY text containing: 'Video', 'Watch', 'Play', 'Duration', 'Listen', 'Podcast'\\n\" +\n" +
+                        "                    \"6. ANY text containing: 'Comment', 'Comments', 'Join the conversation', 'Leave a comment'\\n\" +\n" +
+                        "                    \"7. ANY text containing: 'Advertisement', 'Sponsored', 'Promoted', 'Ad'\\n\" +\n" +
+                        "                    \"8. ANY text containing: 'Cookie', 'Privacy', 'Terms', 'Policy'\\n\" +\n" +
+                        "                    \"9. ANY text containing: 'Homepage', 'Home page', 'Back to', 'Return to', 'Go to'\\n\" +\n" +
+                        "                    \"10. ANY standalone bylines like 'By [Name]', 'Written by', 'Reporter:', 'Author:'\\n\" +\n" +
+                        "                    \"11. ANY navigation elements, breadcrumbs, menus\\n\" +\n" +
+                        "                    \"12. ANY social media widgets, sharing buttons, follow buttons\\n\" +\n" +
+                        "                    \"13. ANY links that say 'Click here', 'Learn more', 'Find out more'\\n\" +\n" +
+                        "                    \"14. ANY copyright notices, disclaimers at the bottom\\n\" +\n" +
+                        "                    \"15. ANY 'Most read', 'Most popular', 'Top stories' sections\\n\\n\" +\n" +
+                        "                    \"KEEP ONLY:\\n\" +\n" +
+                        "                    \"- Main article paragraphs\\n\" +\n" +
+                        "                    \"- Article headings (h2, h3, etc.)\\n\" +\n" +
+                        "                    \"- Essential images that are part of the story\\n\" +\n" +
+                        "                    \"- Block quotes that are part of the article\\n\" +\n" +
+                        "                    \"- Lists that are part of the article content\\n\\n\" +\n" +
+                        "                    \"CRITICAL RULES:\\n\" +\n" +
+                        "                    \"- If you see ANY of the removal keywords above, DELETE that entire element\\n\" +\n" +
+                        "                    \"- Be AGGRESSIVE - when in doubt, REMOVE it\\n\" +\n" +
+                        "                    \"- Do NOT keep navigation, sidebars, footers, headers\\n\" +\n" +
+                        "                    \"- Do NOT keep any metadata, attribution, or source information\\n\" +\n" +
+                        "                    \"- Return ONLY the cleaned HTML with NO explanations\\n\" +\n" +
+                        "                    \"- Maintain valid HTML structure\\n\\n\" +\n");
             }
 
             prompt.append("STEP 2: Use the FINAL HTML (cleaned if step 1 was done, otherwise original).\n");

@@ -482,7 +482,8 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             return;
         }
 
-        boolean translationExists = entryInfo.getTranslatedTitle() != null && !entryInfo.getTranslatedTitle().equals(entryInfo.getEntryTitle());
+        boolean translationExists =
+                entryInfo.getTranslated() != null && !entryInfo.getTranslated().trim().isEmpty();
         toggleTranslationButton.setVisible(translationExists);
 
         if (translationExists) {
@@ -561,7 +562,11 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 isTranslatedView = false;
             } else {
                 isSummaryView = false;
-                isTranslatedView = autoTranslateOn && translationExists;
+                if (translationExists) {
+                    isTranslatedView = true;
+                } else {
+                    isTranslatedView = false;
+                }
             }
 
             isInitialLoad = false;
@@ -601,33 +606,24 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             browserButton.setVisible(false);
         } else {
             if (isTranslatedView && translationExists) {
-                Log.e("LANG_DEBUG", "Target lang = " + sharedPreferencesRepository.getDefaultTranslationLanguage());
-                Log.e("LANG_DEBUG", "Translated content = " + entryInfo.getTranslated());
+                Log.e("FINAL_CHECK", entryInfo.getTranslated());
+                Log.e("DEBUG_TRANSLATION_RAW", "===== TRANSLATED RAW =====");
+                Log.e("DEBUG_TRANSLATION_RAW", entryInfo.getTranslated());
+
+                Log.e("DEBUG_CLEAN_HTML", "===== CLEAN HTML =====");
+                Log.e("DEBUG_CLEAN_HTML", entryInfo.getHtml());
+
+                Log.e("DEBUG_ORIGINAL_HTML", "===== ORIGINAL HTML =====");
+                Log.e("DEBUG_ORIGINAL_HTML", originalHtml);
 
                 String translatedText = entryInfo.getTranslated();
+                htmlToLoad = translatedText;
 
                 if (translatedText != null && !translatedText.isEmpty()) {
 
-                    String[] parts = translatedText.split("--####--", 2);
+                    String plainText = textUtil.extractHtmlContent(translatedText, "--####--");
 
-                    String translatedTitle = parts[0];
-                    String body = parts.length > 1 ? parts[1] : "";
-
-                    titleToDisplay = translatedTitle;
-
-                    // 🔥 KEY FIX: rebuild paragraphs properly
-                    String[] sentences = body.split("--####--");
-
-                    StringBuilder htmlBuilder = new StringBuilder();
-                    for (String s : sentences) {
-                        if (!s.trim().isEmpty()) {
-                            htmlBuilder.append("<p>").append(s.trim()).append("</p>");
-                        }
-                    }
-
-                    htmlToLoad = htmlBuilder.toString();
-
-                    contentForTts = translatedText;
+                    contentForTts = titleToDisplay + " --####-- " + plainText;
                     langForTts = sharedPreferencesRepository.getDefaultTranslationLanguage();
                 } else {
                     htmlToLoad = "<p>No translated content available</p>";
@@ -661,6 +657,42 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             summarizeButton.setTitle("Show Summary");
             browserButton.setVisible(true);
         }
+
+        Log.e("DEBUG_SOURCE", "====================");
+        Log.e("DEBUG_SOURCE", "ENTRY ID = " + currentId);
+
+        Log.e("DEBUG_SOURCE", "isAiCleaned = " + entryInfo.isAiCleaned());
+        Log.e("DEBUG_SOURCE", "hasCleanHtml = " + (entryInfo.getHtml() != null));
+        Log.e("DEBUG_SOURCE", "hasOriginalHtml = " + (originalHtml != null));
+        Log.e("DEBUG_SOURCE", "hasTranslated = " + (entryInfo.getTranslated() != null));
+
+        Log.e("DEBUG_SOURCE", "isTranslatedView = " + isTranslatedView);
+        Log.e("DEBUG_SOURCE", "isSummaryView = " + isSummaryView);
+
+// 🔥 WHICH SOURCE IS USED
+        if (isSummaryView) {
+            Log.e("DEBUG_SOURCE", "👉 SHOWING: SUMMARY");
+        }
+        else if (isTranslatedView && entryInfo.getTranslated() != null) {
+            Log.e("DEBUG_SOURCE", "👉 SHOWING: TRANSLATED");
+
+            if (entryInfo.isAiCleaned()) {
+                Log.e("DEBUG_SOURCE", "⚠️ EXPECTED: TRANSLATED FROM CLEANED");
+            } else {
+                Log.e("DEBUG_SOURCE", "⚠️ EXPECTED: TRANSLATED FROM ORIGINAL");
+            }
+        }
+        else {
+            if (entryInfo.isAiCleaned() && entryInfo.getHtml() != null) {
+                Log.e("DEBUG_SOURCE", "👉 SHOWING: CLEANED HTML");
+            } else if (originalHtml != null) {
+                Log.e("DEBUG_SOURCE", "👉 SHOWING: ORIGINAL HTML");
+            } else {
+                Log.e("DEBUG_SOURCE", "👉 SHOWING: FALLBACK CONTENT");
+            }
+        }
+
+        Log.e("DEBUG_SOURCE", "====================");
 
         loadHtmlIntoWebView(htmlToLoad, titleToDisplay);
 
