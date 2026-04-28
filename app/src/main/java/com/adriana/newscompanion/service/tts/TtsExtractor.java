@@ -783,7 +783,7 @@ public class TtsExtractor {
 
                                     entryRepository.updateTranslatedTitle(translatedTitle, entry.getId());
 
-                                    //String finalTranslated = translatedTitle + delimiter + translated;
+                                    String finalTranslated = translatedTitle + delimiter + translated;
                                     //entryRepository.updateTranslatedText(finalTranslated, entry.getId());
                                     entryRepository.updateTranslatedText(
                                             "<p>" + translated.replace(delimiter, "</p><p>") + "</p>",
