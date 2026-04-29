@@ -106,7 +106,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     private String originalHtmlForSummary; // To store content when showing a summary
 
     private MenuItem toggleTranslationButton;
-    private boolean isTranslatedView = true;
+    private boolean isTranslatedView = false;
     private MaterialToolbar toolbar;
 
     private String targetLanguage;
@@ -264,11 +264,9 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
             // Invalidate immediately
             new Thread(() -> {
-                entryRepository.invalidateAllAiContentSync();
+                entryRepository.invalidateAllTranslationsSync();
+                ttsExtractor.processTranslationQueue();
             }).start();
-
-            // Restart pipeline
-            //ttsExtractor.extractAllEntries();
 
             Snackbar.make(findViewById(R.id.webView_view),
                     "Language changed. Reprocessing...",
@@ -317,7 +315,11 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             if (getSupportActionBar() != null) {
                 getSupportActionBar().setTitle(result.finalTitle);
             }
-            loadHtmlIntoWebView(result.finalHtml, result.finalTitle);
+            if (isTranslatedView && !isSummaryView) {
+                loadHtmlIntoWebView(result.finalHtml, result.finalTitle);
+            } else {
+                Log.e("UI_GUARD", "🚫 Ignored translation result (user not in translated view)");
+            }
 
             String targetLang = sharedPreferencesRepository.getDefaultTranslationLanguage();
             String plainTextContent = textUtil.extractHtmlContent(result.finalHtml, "--####--");
@@ -482,8 +484,13 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             return;
         }
 
+        String currentLang = sharedPreferencesRepository.getDefaultTranslationLanguage();
+
         boolean translationExists =
-                entryInfo.getTranslated() != null && !entryInfo.getTranslated().trim().isEmpty();
+                entryInfo.getTranslated() != null &&
+                        entryInfo.getTargetTranslationLanguage() != null &&
+                        entryInfo.getTargetTranslationLanguage().equals(currentLang);
+
         toggleTranslationButton.setVisible(translationExists);
 
         if (translationExists) {
@@ -496,6 +503,9 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     }
 
     private void loadEntryContent() {
+        if (isSummaryView) {
+            isTranslatedView = false;
+        }
         String htmlToLoad = "";
         String titleToDisplay = "";
         String contentForTts = "";
@@ -551,8 +561,15 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         }
 
         boolean autoTranslateOn = sharedPreferencesRepository.getAutoTranslate();
-        boolean translationExists = entryInfo.getTranslated() != null && !entryInfo.getTranslated().trim().isEmpty();
-        Log.e("UI_DEBUG", "translated = " + entryInfo.getTranslated());
+        String currentLang = sharedPreferencesRepository.getDefaultTranslationLanguage();
+
+        boolean translationExists =
+                entryInfo.getTranslated() != null &&
+                        entryInfo.getTargetTranslationLanguage() != null &&
+                        entryInfo.getTargetTranslationLanguage().equals(currentLang);
+        boolean langMatches =
+                entryInfo.getTargetTranslationLanguage() != null &&
+                        entryInfo.getTargetTranslationLanguage().equals(currentLang);
         boolean summaryExists = entryInfo.getSummary() != null && !entryInfo.getSummary().trim().isEmpty();
 
         if (isInitialLoad) {
@@ -605,7 +622,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
             summarizeButton.setTitle("Show Full Article");
             browserButton.setVisible(false);
         } else {
-            if (isTranslatedView && translationExists) {
+            if (isTranslatedView && translationExists && langMatches) {
                 Log.e("FINAL_CHECK", entryInfo.getTranslated());
                 Log.e("DEBUG_TRANSLATION_RAW", "===== TRANSLATED RAW =====");
                 Log.e("DEBUG_TRANSLATION_RAW", entryInfo.getTranslated());
@@ -617,21 +634,29 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 Log.e("DEBUG_ORIGINAL_HTML", originalHtml);
 
                 String translatedText = entryInfo.getTranslated();
-                htmlToLoad = translatedText;
 
                 if (translatedText != null && !translatedText.isEmpty()) {
+                    htmlToLoad = translatedText;
+                    titleToDisplay = entryInfo.getTranslatedTitle();
+                } else {
+                    // 🔥 HARD FALLBACK → NEVER MIX
+                    isTranslatedView = false;
 
-                    String plainText = textUtil.extractHtmlContent(translatedText, "--####--");
+                    htmlToLoad = entryInfo.getHtml() != null
+                            ? entryInfo.getHtml()
+                            : originalHtml;
 
-                    contentForTts = titleToDisplay + " --####-- " + plainText;
+                    titleToDisplay = entryInfo.getEntryTitle();
+                }
+
+                if (translatedText != null && !translatedText.isEmpty()) {
                     langForTts = sharedPreferencesRepository.getDefaultTranslationLanguage();
                 } else {
                     htmlToLoad = "<p>No translated content available</p>";
                 }
 
-                titleToDisplay = entryInfo.getTranslatedTitle() != null
-                        ? entryInfo.getTranslatedTitle()
-                        : entryInfo.getEntryTitle();
+                String plainText = textUtil.extractHtmlContent(translatedText, "--####--");
+                contentForTts = titleToDisplay + " --####-- " + plainText;
             } else {
                 // 🔥 PRIORITY 1: CLEANED HTML
                 if (entryInfo.isAiCleaned() && entryInfo.getHtml() != null && !entryInfo.getHtml().trim().isEmpty()) {
@@ -673,7 +698,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         if (isSummaryView) {
             Log.e("DEBUG_SOURCE", "👉 SHOWING: SUMMARY");
         }
-        else if (isTranslatedView && entryInfo.getTranslated() != null) {
+        else if (isTranslatedView && translationExists) {
             Log.e("DEBUG_SOURCE", "👉 SHOWING: TRANSLATED");
 
             if (entryInfo.isAiCleaned()) {
@@ -789,6 +814,11 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
     private boolean handleSummarizeClick() {
         if (isSummaryView) {
             isSummaryView = false;
+
+            // 🔥 FORCE ORIGINAL VIEW WHEN EXIT SUMMARY
+            isTranslatedView = false;
+            sharedPreferencesRepository.setIsTranslatedView(currentId, false);
+
             loadEntryContent();
             if (!isReadingMode && mMediaBrowserHelper != null && mMediaBrowserHelper.getTransportControls() != null) {
                 mMediaBrowserHelper.getTransportControls().sendCustomAction("contentChangedSummary", null);
@@ -844,10 +874,11 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                         Log.d(TAG, "Original HTML restored from DB.");
                     }
 
-                    String translatedHtmlFromDb = entry.getHtml();
-                    if (translatedHtmlFromDb != null) {
+                    String translatedHtmlFromDb = entry.getTranslated();
+                    if (translatedHtmlFromDb != null && isTranslatedView && !isSummaryView) {
                         webViewViewModel.updateHtml(translatedHtmlFromDb, currentId);
-                        Log.d(TAG, "Translated HTML synced from auto translation.");
+                    } else {
+                        Log.e("UI_GUARD", "🚫 Skipped updateHtml (not in translated view)");
                     }
 
                     toggleTranslationButton.setTitle(isTranslatedView ? "Show Original" : "Show Translation");
@@ -870,9 +901,9 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
         EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
 
-        Log.e("ENTRY_DEBUG", "currentId = " + currentId);
-        Log.e("ENTRY_DEBUG", "entryInfo = " + entryInfo);
-        Log.e("ENTRY_DEBUG", "entryInfo.id = " + (entryInfo != null ? entryInfo.getEntryId() : "NULL"));
+        Log.e("FINAL_RENDER", "TITLE = " + title);
+        Log.e("FINAL_RENDER", "isTranslatedView = " + isTranslatedView);
+        Log.e("FINAL_RENDER", "HTML snippet = " + html.substring(0, Math.min(100, html.length())));
         if (entryInfo != null && !doc.html().contains("class=\"entry-header\"")) {
             doc.selectFirst("body").prepend(
                     webViewViewModel.getHtml(
@@ -960,8 +991,7 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 return true;
 
             case R.id.toggleTranslation:
-                boolean currentMode = sharedPreferencesRepository.getIsTranslatedView(currentId);
-                isTranslatedView = !currentMode;
+                isTranslatedView = !isTranslatedView;
                 sharedPreferencesRepository.setIsTranslatedView(currentId, isTranslatedView);
                 // Stop TTS and save current sentence index before switching
                 if (!isReadingMode && ttsPlayer != null) {

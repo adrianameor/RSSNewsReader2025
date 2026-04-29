@@ -308,4 +308,8 @@ public class EntryInfo {
     public void setSummary(String summary) {
         this.summary = summary;
     }
+
+    public void setTargetTranslationLanguage(String targetTranslationLanguage) {
+        this.targetTranslationLanguage = targetTranslationLanguage;
+    }
 }

@@ -180,7 +180,7 @@ public class SharedPreferencesRepository {
     }
 
     public boolean getAutoTranslate() {
-        return sharedPreferences.getBoolean("autoTranslate", false);
+        return sharedPreferences.getBoolean("autoTranslate", true);
     }
 
     public void setAutoTranslate(boolean autoTranslate) {

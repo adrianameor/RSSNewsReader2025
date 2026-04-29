@@ -81,6 +81,7 @@
         app:title="@string/translation_header">
         
         <ListPreference
+            app:defaultValue="en"
             app:entries="@array/defaultTranslationLanguage"
             app:entryValues="@array/defaultTranslationLanguage_values"
             app:icon="@drawable/ic_language"
@@ -98,7 +99,7 @@
             app:title="@string/translationMethod_title" />
 
         <SwitchPreferenceCompat
-            app:defaultValue="false"
+            app:defaultValue="true"
             app:icon="@drawable/ic_auto_translate"
             app:key="autoTranslate"
             app:summaryOff="@string/auto_translate_off"

@@ -52,6 +52,7 @@ import io.reactivex.rxjava3.disposables.CompositeDisposable;
 
 @Singleton
 public class TtsExtractor {
+    private boolean aiInProgress = false;
     private String webViewExpectedUrl = null;
 
     private final CompositeDisposable disposables = new CompositeDisposable();
@@ -248,6 +249,8 @@ public class TtsExtractor {
         }
 
         Entry entry;
+        extractionInProgress = false;
+        currentIdInProgress = -1;
 
         while (true) {
             entry = entryRepository.getEmptyContentEntry();
@@ -594,23 +597,24 @@ public class TtsExtractor {
     public String getCurrentLanguage() { return currentLanguage; }
 
     private void runAiPipelineNow() {
+        if (aiInProgress) return;
+        aiInProgress = true;
         new Thread(() -> {
             synchronized (aiLock) {
                 try {
-                    boolean doSummarize = sharedPreferencesRepository.isSummarizationEnabled();
-                    boolean doTranslate = sharedPreferencesRepository.getAutoTranslate();
-                    boolean doClean = sharedPreferencesRepository.isAiCleaningEnabled();
-
                     while (true) {
+                        boolean doSummarize = sharedPreferencesRepository.isSummarizationEnabled();
+                        boolean doTranslate = sharedPreferencesRepository.getAutoTranslate();
+                        boolean doClean = sharedPreferencesRepository.isAiCleaningEnabled();
 
-                        Entry entry = entryRepository.getNextEntryForAiProcessing(
-                                sharedPreferencesRepository.getCurrentReadingEntryId(),
-                                doSummarize,
-                                doClean,
-                                doTranslate
-                        );
+                        final String currentLang = sharedPreferencesRepository.getDefaultTranslationLanguage();
 
-                        if (entry == null) break;
+                        Entry entry = entryRepository.getNextEntryForTranslation(currentLang);
+
+                        if (entry == null) {
+                            Log.e("AI_PIPELINE", "No work → EXIT thread");
+                            break;
+                        }
 
                         String html;
 
@@ -634,11 +638,11 @@ public class TtsExtractor {
                                 Log.e("AI_SINGLE", "🚀 USING SINGLE CALL ID = " + entry.getId());
 
                                 String json = translationRepository.processMultiTask(
-                                                html,
-                                                doClean,
-                                                doTranslate,
-                                                doSummarize,
-                                                sharedPreferencesRepository.getDefaultTranslationLanguage()
+                                        html,
+                                        doClean,
+                                        doTranslate,
+                                        doSummarize,
+                                                currentLang
                                         ).timeout(90, java.util.concurrent.TimeUnit.SECONDS)
                                         .blockingGet();
 
@@ -656,6 +660,28 @@ public class TtsExtractor {
 
                                     org.json.JSONObject obj = new org.json.JSONObject(json);
 
+                                    if (doTranslate && !obj.has("translated_html")) {
+                                        Log.e("AI_MISSING", "❌ translated_html missing → fallback");
+                                        singleCallSuccess = false;
+                                    }
+                                    if (doClean && !obj.has("cleaned_html")) {
+                                        singleCallSuccess = false;
+                                    }
+                                    if (doSummarize && !obj.has("summary")) {
+                                        singleCallSuccess = false;
+                                    }
+
+
+                                    boolean hasClean = !doClean || obj.has("cleaned_html");
+                                    boolean hasSummary = !doSummarize || obj.has("summary");
+                                    boolean hasTranslate = !doTranslate || obj.has("translated_html");
+
+                                    singleCallSuccess = hasClean && hasSummary && hasTranslate;
+
+                                    if (!singleCallSuccess) {
+                                        Log.e("AI_SINGLE", "❌ INCOMPLETE → FALLBACK");
+                                    }
+
                                     if (doClean && obj.has("cleaned_html")) {
                                         String cleaned = obj.getString("cleaned_html");
                                         entryRepository.updateHtml(cleaned, entry.getId());
@@ -672,16 +698,28 @@ public class TtsExtractor {
                                     }
 
                                     if (doTranslate && obj.has("translated_html")) {
+
                                         String translatedHtml = obj.getString("translated_html");
 
-                                        org.jsoup.nodes.Document doc = org.jsoup.Jsoup.parse(translatedHtml);
-                                        String translatedTitle = doc.select("h1").text();
+                                        String translatedTitle = null;
+
+                                        String sourceLang = ensureFeedLanguageDetected(entry.getFeedId());
+
+                                        translatedTitle = translationRepository.translateText(
+                                                entry.getTitle(),
+                                                sourceLang,
+                                                currentLang
+                                        ).blockingGet();
+
+                                        if (translatedTitle == null || translatedTitle.isEmpty()) {
+                                            translatedTitle = entry.getTitle();
+                                        }
 
                                         if (translatedTitle == null || translatedTitle.isEmpty()) {
                                             translatedTitle = translationRepository.translateText(
                                                     entry.getTitle(),
-                                                    "auto",
-                                                    sharedPreferencesRepository.getDefaultTranslationLanguage()
+                                                    sourceLang,
+                                                    currentLang
                                             ).blockingGet();
                                         }
 
@@ -689,19 +727,13 @@ public class TtsExtractor {
                                             translatedTitle = entry.getTitle();
                                         }
 
-                                        entryRepository.updateTranslatedText(
-                                                translatedHtml, // 🔥 STORE FULL HTML
-                                                entry.getId()
+                                        entryRepository.saveTranslationResult(
+                                                entry.getId(),
+                                                translatedHtml,
+                                                translatedTitle,
+                                                currentLang
                                         );
-
-                                        entryRepository.updateTranslatedTitle(translatedTitle, entry.getId());
                                     }
-
-                                    boolean hasClean = !doClean || obj.has("cleaned_html");
-                                    boolean hasSummary = !doSummarize || obj.has("summary");
-                                    boolean hasTranslate = !doTranslate || obj.has("translated_html");
-
-                                    singleCallSuccess = hasClean && hasSummary && hasTranslate;
                                 }
 
                             } catch (Exception e) {
@@ -765,41 +797,37 @@ public class TtsExtractor {
                         }
 
                         if (doTranslate) {
-                            Log.e("TRANSLATE_DEBUG", "🔥 START ID = " + entry.getId());
-                            Log.e("TRANSLATE_DEBUG", "TARGET = " + sharedPreferencesRepository.getDefaultTranslationLanguage());
+                            String sourceLang = ensureFeedLanguageDetected(entry.getFeedId());
                             try {
                                 String translated = translationRepository.translateText(
                                         text,
-                                        "auto",
-                                        sharedPreferencesRepository.getDefaultTranslationLanguage()
+                                        sourceLang,
+                                        currentLang
                                 ).blockingGet();
 
                                 if (translated != null && !translated.isEmpty()) {
                                     String translatedTitle = translationRepository.translateText(
                                             entry.getTitle(),
-                                            "auto",
-                                            sharedPreferencesRepository.getDefaultTranslationLanguage()
+                                            sourceLang,
+                                            currentLang
                                     ).blockingGet();
 
-                                    entryRepository.updateTranslatedTitle(translatedTitle, entry.getId());
-
-                                    String finalTranslated = translatedTitle + delimiter + translated;
-                                    //entryRepository.updateTranslatedText(finalTranslated, entry.getId());
-                                    entryRepository.updateTranslatedText(
+                                    entryRepository.saveTranslationResult(
+                                            entry.getId(),
                                             "<p>" + translated.replace(delimiter, "</p><p>") + "</p>",
-                                            entry.getId()
+                                            translatedTitle,
+                                            currentLang
                                     );
+                                    Entry debugEntry = entryRepository.getEntryById(entry.getId());
+
+                                    Log.e("CHECK_DB", "ID=" + debugEntry.getId()
+                                            + " | translated=" + debugEntry.getTranslated()
+                                            + " | lang=" + debugEntry.getTargetTranslationLanguage());
                                 }
                                 Log.e("TRANSLATE_DEBUG", "✅ DONE ID = " + entry.getId());
                                 Log.e("TRANSLATE_DEBUG", "RESULT = " + translated);
 
                             } catch (Exception ignored) {}
-
-                            // ✅ ALWAYS mark translation done (CRITICAL)
-                            /*entryRepository.updateTranslatedText(
-                                    entry.getTitle() + delimiter + text,
-                                    entry.getId()
-                            );*/
                         }
                         // 🔥 FORCE REFRESH FROM DB (CRITICAL)
                         entry = entryRepository.getEntryById(entry.getId());
@@ -811,8 +839,27 @@ public class TtsExtractor {
                     }
                 } catch (Exception e) {
                     Log.e("PIPELINE_TRACE", "Direct summarization failed", e);
+                } finally {
+                    aiInProgress = false;
+                    Entry next = entryRepository.getNextEntryForTranslation(
+                            sharedPreferencesRepository.getDefaultTranslationLanguage()
+                    );
+
+                    if (next != null) {
+                        Log.e("AI_RESTART", "🔁 Restarting pipeline for remaining entries...");
+                        runAiPipelineNow();
+                    }
                 }
             }
+        }).start();
+    }
+
+    public void processTranslationQueue() {
+        new Thread(() -> {
+            synchronized (aiLock) {
+                aiInProgress = false; // 🔥 FORCE RESET
+            }
+            runAiPipelineNow();
         }).start();
     }
 }

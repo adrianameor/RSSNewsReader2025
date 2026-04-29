@@ -43,11 +43,14 @@ public interface DeepSeekApiService {
             String prompt;
             if (isHtml) {
                 prompt = String.format(Locale.US,
-                        "You are an expert HTML translator. Translate all human-readable text content within the following HTML from %s to %s. " +
-                                "This includes article body text, headings, and crucially, all image captions (figcaption or caption tags). " +
-                                "Do not change any HTML tags or their attributes. Maintain the original HTML structure perfectly. " +
-                                "Only provide the translated HTML, with no additional explanations. Here is the HTML to translate:\n\n%s",
-                        sourceLang, targetLang, textToTranslate
+                        "CRITICAL: Translate ALL content strictly into %s. " +
+                                "DO NOT use any other language. DO NOT mix languages. " +
+                                "Even if the text appears already translated, force output in %s. " +
+                                "Translate article body text, headings, and all image captions. " +
+                                "Do not translate proper nouns or technical terms. " +
+                                "Do not change any HTML tags or attributes. Maintain structure exactly. " +
+                                "Return ONLY the translated HTML. No explanation.\n\n%s",
+                        targetLang, targetLang, textToTranslate
                 );
             } else {
                 prompt = String.format(Locale.US,
@@ -170,46 +173,39 @@ public interface DeepSeekApiService {
             prompt.append("Follow these steps STRICTLY:\n");
 
             if (doClean) {
-                prompt.append("STEP 1: You are an AGGRESSIVE HTML cleaner. Your PRIMARY GOAL is to remove ALL clutter and keep ONLY the main article content. Be ruthless in removing anything that is not core article text.\\n\\n\" +\n" +
-                        "                    \"REMOVE COMPLETELY (delete the entire element and its content):\\n\" +\n" +
-                        "                    \"1. ANY text containing: 'Related', 'Read more', 'You might also like', 'More stories', 'Recommended', 'Trending'\\n\" +\n" +
-                        "                    \"2. ANY text containing: 'Subscribe', 'Sign up', 'Newsletter', 'Email', 'Log in', 'Sign in', 'Register', 'Join'\\n\" +\n" +
-                        "                    \"3. ANY text containing: 'Share', 'Tweet', 'Facebook', 'Twitter', 'LinkedIn', 'WhatsApp', 'Instagram'\\n\" +\n" +
-                        "                    \"4. ANY text containing: 'Image source', 'Image caption', 'Photo caption', 'Getty Images', 'Reuters', 'AP Photo', 'AFP', 'Photo by', 'Image credit', 'Photograph:'\\n\" +\n" +
-                        "                    \"5. ANY text containing: 'Video', 'Watch', 'Play', 'Duration', 'Listen', 'Podcast'\\n\" +\n" +
-                        "                    \"6. ANY text containing: 'Comment', 'Comments', 'Join the conversation', 'Leave a comment'\\n\" +\n" +
-                        "                    \"7. ANY text containing: 'Advertisement', 'Sponsored', 'Promoted', 'Ad'\\n\" +\n" +
-                        "                    \"8. ANY text containing: 'Cookie', 'Privacy', 'Terms', 'Policy'\\n\" +\n" +
-                        "                    \"9. ANY text containing: 'Homepage', 'Home page', 'Back to', 'Return to', 'Go to'\\n\" +\n" +
-                        "                    \"10. ANY standalone bylines like 'By [Name]', 'Written by', 'Reporter:', 'Author:'\\n\" +\n" +
-                        "                    \"11. ANY navigation elements, breadcrumbs, menus\\n\" +\n" +
-                        "                    \"12. ANY social media widgets, sharing buttons, follow buttons\\n\" +\n" +
-                        "                    \"13. ANY links that say 'Click here', 'Learn more', 'Find out more'\\n\" +\n" +
-                        "                    \"14. ANY copyright notices, disclaimers at the bottom\\n\" +\n" +
-                        "                    \"15. ANY 'Most read', 'Most popular', 'Top stories' sections\\n\\n\" +\n" +
-                        "                    \"KEEP ONLY:\\n\" +\n" +
-                        "                    \"- Main article paragraphs\\n\" +\n" +
-                        "                    \"- Article headings (h2, h3, etc.)\\n\" +\n" +
-                        "                    \"- Essential images that are part of the story\\n\" +\n" +
-                        "                    \"- Block quotes that are part of the article\\n\" +\n" +
-                        "                    \"- Lists that are part of the article content\\n\\n\" +\n" +
-                        "                    \"CRITICAL RULES:\\n\" +\n" +
-                        "                    \"- If you see ANY of the removal keywords above, DELETE that entire element\\n\" +\n" +
-                        "                    \"- Be AGGRESSIVE - when in doubt, REMOVE it\\n\" +\n" +
-                        "                    \"- Do NOT keep navigation, sidebars, footers, headers\\n\" +\n" +
-                        "                    \"- Do NOT keep any metadata, attribution, or source information\\n\" +\n" +
-                        "                    \"- Return ONLY the cleaned HTML with NO explanations\\n\" +\n" +
-                        "                    \"- Maintain valid HTML structure\\n\\n\" +\n");
+                prompt.append(
+                        "STEP 1: Clean the HTML aggressively. Remove ads, navigation, social buttons, subscriptions, related links, and non-article content. " +
+                                "Keep only main article paragraphs, headings, images, captions, and blockquotes. " +
+                                "Return valid clean HTML only.\n"
+                );
             }
 
             prompt.append("STEP 2: Use the FINAL HTML (cleaned if step 1 was done, otherwise original).\n");
 
             if (doTranslate) {
-                prompt.append("- Translate FULL HTML (don't miss any single word) into ").append(targetLang).append(" including title.\n");
+                prompt.append(
+                        "- TASK: TRANSLATE HTML\n" +
+                                "- Output MUST be fully translated into " + targetLang + "\n" +
+                                "- Output MUST NOT contain any other language\n" +
+                                "- Output MUST NOT remain in original language\n" +
+                                "- If any part is not translated, the output is INVALID\n"
+                );
+
+                prompt.append("- DO NOT use any other language.\n");
+                prompt.append("- DO NOT keep original language.\n");
+                prompt.append("- Even if content is already in another language, FORCE translate to ")
+                        .append(targetLang)
+                        .append(".\n");
+
+                prompt.append("- Translate EVERYTHING including title, captions, and body.\n");
             }
 
             if (doSummarize) {
-                prompt.append("- Generate a summary in ").append(targetLang).append(".\n");
+                prompt.append("- CRITICAL: Generate summary strictly in ")
+                        .append(targetLang)
+                        .append(".\n");
+
+                prompt.append("- DO NOT use any other language.\n");
             }
 
             prompt.append("\nIMPORTANT:\n");

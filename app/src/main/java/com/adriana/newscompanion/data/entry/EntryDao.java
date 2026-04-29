@@ -144,6 +144,16 @@ public interface EntryDao {
     @Query("SELECT * FROM entry_table WHERE content is null")
     Entry getEmptyEntry();
 
+    @Query("SELECT * FROM entry_table WHERE " +
+            "content IS NOT NULL AND (" +
+            "isAiSummarized = 0 OR " +
+            "translated IS NULL OR " +
+            "target_translation_language IS NULL OR " +
+            "target_translation_language != :currentLang" +
+            ") " +
+            "ORDER BY publishedDate DESC LIMIT 1")
+    Entry getNextEntryForTranslation(String currentLang);
+
     @Query("SELECT id FROM entry_table WHERE feedId = :id")
     List<Long> getIdsByFeedId(long id);
 
@@ -327,4 +337,23 @@ public interface EntryDao {
                     "LIMIT 1"
     )
     Entry getNextEntryForAiProcessing(long currentId, int summarizeEnabled, int cleanEnabled, int translateEnabled);
+
+    @Query("UPDATE entry_table SET target_translation_language = :lang WHERE id = :id")
+    void updateTranslatedLanguage(long id, String lang);
+
+    @Query("UPDATE entry_table SET " +
+            "translated = NULL, " +
+            "translated_title = NULL, " +
+            "translated_summary = NULL, " +
+            "target_translation_language = NULL, " +
+            "isAiSummarized = 0, " +
+            "isAiSummaryTranslated = 0")
+    void invalidateAllTranslations();
+
+    @Query("UPDATE entry_table SET " +
+            "translated = :translatedHtml, " +
+            "translated_title = :translatedTitle, " +
+            "target_translation_language = :lang " +
+            "WHERE id = :id")
+    void saveTranslationResult(long id, String translatedHtml, String translatedTitle, String lang);
 }

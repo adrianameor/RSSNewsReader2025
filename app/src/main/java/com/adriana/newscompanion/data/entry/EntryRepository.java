@@ -501,4 +501,20 @@ public class EntryRepository {
                 translateEnabled ? 1 : 0
         );
     }
+
+    public void updateTranslatedLanguage(long id, String lang) {
+        entryDao.updateTranslatedLanguage(id, lang);
+    }
+
+    public Entry getNextEntryForTranslation(String lang) {
+        return entryDao.getNextEntryForTranslation(lang);
+    }
+
+    public void invalidateAllTranslationsSync() {
+        entryDao.invalidateAllTranslations();
+    }
+
+    public void saveTranslationResult(long id, String html, String title, String lang) {
+        entryDao.saveTranslationResult(id, html, title, lang);
+    }
 }
