@@ -517,4 +517,8 @@ public class EntryRepository {
     public void saveTranslationResult(long id, String html, String title, String lang) {
         entryDao.saveTranslationResult(id, html, title, lang);
     }
+
+    public void resetFailedExtractionsSync() {
+        entryDao.resetFailedExtractions();
+    }
 }

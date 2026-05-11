@@ -19,3 +19,22 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+-dontwarn org.slf4j.impl.StaticLoggerBinder
+# Keep Retrofit interfaces (VERY IMPORTANT)
+-keep interface com.adriana.newscompanion.data.deepseek.** { *; }
+
+# Keep model classes (DeepSeekResponse etc)
+-keep class com.adriana.newscompanion.data.deepseek.** { *; }
+
+# Keep generic signatures (CRITICAL)
+-keepattributes Signature
+
+# Keep RxJava
+-keep class io.reactivex.rxjava3.** { *; }
+
+# Keep Retrofit
+-keep class retrofit2.** { *; }
+
+# Keep Gson models
+-keep class com.google.gson.** { *; }

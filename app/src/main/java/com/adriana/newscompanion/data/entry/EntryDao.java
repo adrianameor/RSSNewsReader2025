@@ -145,7 +145,9 @@ public interface EntryDao {
     Entry getEmptyEntry();
 
     @Query("SELECT * FROM entry_table WHERE " +
-            "content IS NOT NULL AND (" +
+            "content IS NOT NULL AND " +
+            "content != '' AND " +
+            "content != 'FAILED' AND (" +
             "isAiSummarized = 0 OR " +
             "translated IS NULL OR " +
             "target_translation_language IS NULL OR " +
@@ -356,4 +358,7 @@ public interface EntryDao {
             "target_translation_language = :lang " +
             "WHERE id = :id")
     void saveTranslationResult(long id, String translatedHtml, String translatedTitle, String lang);
+
+    @Query("UPDATE entry_table SET content = NULL WHERE content = 'FAILED'")
+    void resetFailedExtractions();
 }

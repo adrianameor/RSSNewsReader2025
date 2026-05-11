@@ -1953,9 +1953,22 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 Log.e("COOKIE_FLOW", "DOMAIN = " + domain);
 
                 sharedPreferencesRepository.setSavedCookie(domain, cookie);
-                android.webkit.CookieManager.getInstance().flush();
-                Log.e("SP_DEBUG", "[WEBVIEW] Saved cookie for domain = " + domain);
-                Log.e("COOKIE_FLOW", "SAVED → cookie_" + domain);
+                CookieManager cookieManager = CookieManager.getInstance();
+
+                cookieManager.setAcceptCookie(true);
+
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                    cookieManager.setAcceptThirdPartyCookies(view, true);
+                }
+
+                String cookieNow = cookieManager.getCookie(url);
+
+                if (cookieNow != null) {
+                    cookieManager.setCookie(url, cookieNow);
+                    Log.e("COOKIE_FORCE_SAVE", "Re-applied cookie = " + cookieNow);
+                }
+
+                cookieManager.flush();
             }
 
             String titleFromIntent = getIntent().getStringExtra("entry_title");

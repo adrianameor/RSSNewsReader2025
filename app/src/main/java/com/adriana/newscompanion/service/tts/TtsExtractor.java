@@ -43,6 +43,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -229,10 +230,32 @@ public class TtsExtractor {
             Log.e("COOKIE_FORCE", "Applying cookie to WebView: " + cookie);
 
             if (cookie != null) {
-                CookieManager.getInstance().setCookie(url, cookie);
+                CookieManager cookieManager = CookieManager.getInstance();
+
+                if (cookie != null) {
+                    String[] cookies = cookie.split(";");
+
+                    for (String c : cookies) {
+                        cookieManager.setCookie(url, c.trim());
+                    }
+
+                    cookieManager.flush();
+                }
             }
 
-            webView.loadUrl(url);
+            Map<String, String> headers = new HashMap<>();
+
+            if (cookie != null) {
+                headers.put("Cookie", cookie);
+            }
+
+// 🔥 CRITICAL: mimic real browser
+            headers.put("User-Agent", webView.getSettings().getUserAgentString());
+            headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+            headers.put("Accept-Language", "en-US,en;q=0.9");
+            headers.put("Connection", "keep-alive");
+
+            webView.loadUrl(url, headers);
         });
         startWatchdog(45000);
     }
@@ -273,7 +296,7 @@ public class TtsExtractor {
 
                 retryCountMap.remove(entry.getId());
 
-                entryRepository.updateContent("", entry.getId());
+                entryRepository.updateContent("FAILED", entry.getId());
 
                 continue;
             }
@@ -504,7 +527,7 @@ public class TtsExtractor {
                                         }
                                         String finalFullText = contentCollector.toString();
                                         if (finalFullText.length() < 200 || finalFullText.toLowerCase().contains("please enable javascript")) {
-                                            entryRepository.updateContent("", currentIdInProgress);
+                                            entryRepository.updateContent("FAILED", currentIdInProgress);
                                         } else {
                                             String contentWithTitle = currentTitle + delimiter + finalFullText;
 
@@ -616,6 +639,14 @@ public class TtsExtractor {
                             break;
                         }
 
+                        if (entry.getContent() == null
+                                || entry.getContent().isEmpty()
+                                || "FAILED".equals(entry.getContent())) {
+
+                            Log.e("AI_SKIP", "Skipping bad entry ID = " + entry.getId());
+                            continue;
+                        }
+
                         String html;
 
                         if (entry.isAiCleaned() && entry.getHtml() != null) {
@@ -625,7 +656,7 @@ public class TtsExtractor {
                         }
                         if (html == null || html.isEmpty()) continue;
                         int length = html.length();
-                        boolean useSingleCall = length < 15000;
+                        boolean useSingleCall = length < 12000;
 
                         String plainText = textUtil.extractHtmlContent(html, delimiter);
 
@@ -643,7 +674,7 @@ public class TtsExtractor {
                                         doTranslate,
                                         doSummarize,
                                                 currentLang
-                                        ).timeout(90, java.util.concurrent.TimeUnit.SECONDS)
+                                        ).timeout(150, java.util.concurrent.TimeUnit.SECONDS)
                                         .blockingGet();
 
                                 Log.e("AI_JSON_RAW", json);
@@ -781,19 +812,40 @@ public class TtsExtractor {
 
                         if (doSummarize) {
                             try {
-                                String result = translationRepository.summarizeText(
-                                        text,
-                                        sharedPreferencesRepository.getAiSummaryLength(),
-                                        sharedPreferencesRepository.getDefaultTranslationLanguage()
-                                ).blockingGet();
 
-                                if (result != null && !result.isEmpty()) {
-                                    entryRepository.updateSummary(result, entry.getId());
+                                // ONLY generate summary if not exists
+                                if (entry.getSummary() == null) {
+                                    String result = translationRepository.summarizeText(
+                                            text,
+                                            sharedPreferencesRepository.getAiSummaryLength(),
+                                            currentLang
+                                    ).blockingGet();
+
+                                    if (result != null && !result.isEmpty()) {
+                                        entryRepository.updateSummary(result, entry.getId());
+                                    }
+                                }
+
+                                if (doTranslate) {
+                                    String sourceLang = ensureFeedLanguageDetected(entry.getFeedId());
+
+                                    String translatedTitle = translationRepository.translateText(
+                                            entry.getTitle(),
+                                            sourceLang,
+                                            currentLang
+                                    ).blockingGet();
+
+                                    if (translatedTitle != null && !translatedTitle.isEmpty()) {
+                                        entryRepository.updateTranslatedTitle(translatedTitle, entry.getId());
+                                        entryRepository.updateTranslatedLanguage(entry.getId(), currentLang);
+                                    }
                                 }
 
                             } catch (Exception ignored) {}
 
                             entryRepository.markAsAiSummarized(entry.getId(), false);
+
+                            entry = entryRepository.getEntryById(entry.getId());
                         }
 
                         if (doTranslate) {
@@ -861,5 +913,9 @@ public class TtsExtractor {
             }
             runAiPipelineNow();
         }).start();
+    }
+
+    public void startPipeline() {
+        runAiPipelineNow();
     }
 }

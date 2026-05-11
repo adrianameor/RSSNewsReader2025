@@ -104,4 +104,11 @@ public class MainActivityViewModel extends ViewModel {
         Log.e("PIPELINE_FIX", "🚀 ViewModel triggering extraction");
         ttsExtractor.extractAllEntries();
     }
+
+    public void reprocessAllAfterImport() {
+        new Thread(() -> {
+            entryRepository.invalidateAllTranslationsSync();
+            ttsExtractor.startPipeline();
+        }).start();
+    }
 }

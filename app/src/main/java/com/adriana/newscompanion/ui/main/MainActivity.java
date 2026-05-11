@@ -164,7 +164,7 @@ public class MainActivity extends AppCompatActivity {
                                                 sharedPreferencesRepository.setConfidenceThreshold(Integer.parseInt(confidenceThreshold));
                                             }
                                             if (defaultTranslationLanguage != null && !defaultTranslationLanguage.isEmpty()) {
-                                                sharedPreferencesRepository.setDefaultTranslationLanguage(defaultTranslationLanguage);
+                                                //sharedPreferencesRepository.setDefaultTranslationLanguage(defaultTranslationLanguage);
                                             }
                                             if (translationMethod != null && !translationMethod.isEmpty()) {
                                                 sharedPreferencesRepository.setTranslationMethod(translationMethod);
@@ -245,6 +245,9 @@ public class MainActivity extends AppCompatActivity {
                                     rehydrateCookies();
                                     new Handler(Looper.getMainLooper()).postDelayed(() -> {
                                         mainActivityViewModel.triggerExtractionAfterImport();
+
+                                        mainActivityViewModel.reprocessAllAfterImport();
+
                                     }, 1000);
                                 } catch (IOException | XmlPullParserException e) {
                                     e.printStackTrace();
