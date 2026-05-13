@@ -86,12 +86,15 @@ public class WebViewViewModel extends ViewModel {
         }
     }
 
+    private final com.adriana.newscompanion.data.feed.FeedRepository feedRepository;
+
     @Inject
-    public WebViewViewModel(EntryRepository entryRepository, TranslationRepository translationRepository, SharedPreferencesRepository sharedPreferencesRepository, TextUtil textUtil) {
+    public WebViewViewModel(EntryRepository entryRepository, TranslationRepository translationRepository, SharedPreferencesRepository sharedPreferencesRepository, TextUtil textUtil, com.adriana.newscompanion.data.feed.FeedRepository feedRepository) {
         this.entryRepository = entryRepository;
         this.translationRepository = translationRepository;
         this.sharedPreferencesRepository = sharedPreferencesRepository;
         this.textUtil = textUtil;
+        this.feedRepository = feedRepository;
     }
 
     @Override
@@ -411,5 +414,14 @@ public class WebViewViewModel extends ViewModel {
         summarizationDisposable.clear();
         isSummarizing.postValue(false);
         _snackbarMessage.postValue("Summarization cancelled.");
+    }
+
+    public void markFeedSessionValid(long feedId) {
+        // Run on background thread — DB write
+        io.reactivex.rxjava3.core.Completable
+                .fromAction(() -> feedRepository.markSessionValid(feedId))
+                .subscribeOn(io.reactivex.rxjava3.schedulers.Schedulers.io())
+                .observeOn(io.reactivex.rxjava3.android.schedulers.AndroidSchedulers.mainThread())
+                .subscribe();
     }
 }

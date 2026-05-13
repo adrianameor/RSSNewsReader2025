@@ -13,6 +13,7 @@ import android.view.ViewGroup;
 import android.widget.TextView;
 import android.widget.Toast;
 import com.adriana.newscompanion.data.repository.TranslationRepository;
+import com.adriana.newscompanion.ui.main.MainActivity;
 import com.adriana.newscompanion.util.AiCleaningTrigger;
 
 import androidx.annotation.NonNull;
@@ -138,7 +139,13 @@ public class AllEntriesFragment extends Fragment implements EntryItemAdapter.Ent
         sortBy = allEntriesViewModel.getSortBy();
         swipeRefreshLayout = binding.swipeRefreshLayout;
 
-        swipeRefreshLayout.setOnRefreshListener(() -> allEntriesViewModel.refreshEntries(swipeRefreshLayout));
+        swipeRefreshLayout.setOnRefreshListener(() -> {
+            allEntriesViewModel.refreshEntries(swipeRefreshLayout);
+            // Trigger session validation so expired-auth Snackbar appears if needed
+            if (requireActivity() instanceof MainActivity) {
+                ((MainActivity) requireActivity()).triggerSessionValidation();
+            }
+        });
 
         binding.deleteAllVisitedEntriesButton.setOnClickListener(view -> allEntriesViewModel.deleteAllVisitedEntries());
 

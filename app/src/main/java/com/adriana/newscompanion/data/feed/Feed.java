@@ -19,12 +19,17 @@ public class Feed {
     private String description;
     private String imageUrl;
     private String language;
+    public static final int AUTH_STATUS_VALID = 0;       // session confirmed working
+    public static final int AUTH_STATUS_EXPIRED = 1;     // validated & found expired
+    public static final int AUTH_STATUS_UNCHECKED = 2;   // never been validated yet
     @ColumnInfo(defaultValue = "0")
     private boolean isPreloaded;
     @ColumnInfo(defaultValue = "0")
     private boolean requiresLogin = false;
     @ColumnInfo(defaultValue = "0")
     private boolean isAuthenticated = false;
+    @ColumnInfo(defaultValue = "2")
+    private int authStatus = AUTH_STATUS_UNCHECKED;
 
     public Feed(String title, String link, String description, String imageUrl, String language) {
         this.title = title;
@@ -144,5 +149,16 @@ public class Feed {
 
     public void setAuthenticated(boolean authenticated) {
         isAuthenticated = authenticated;
+    }
+
+    public int getAuthStatus() { return authStatus; }
+    public void setAuthStatus(int authStatus) { this.authStatus = authStatus; }
+
+    // Convenience helpers used by TtsExtractor:
+    public boolean isSessionValid() {
+        return !requiresLogin || authStatus == AUTH_STATUS_VALID;
+    }
+    public boolean isSessionExpired() {
+        return requiresLogin && authStatus == AUTH_STATUS_EXPIRED;
     }
 }

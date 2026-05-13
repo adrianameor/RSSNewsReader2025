@@ -8,6 +8,8 @@ import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.support.v4.media.MediaBrowserCompat;
 import android.support.v4.media.MediaMetadataCompat;
 import android.support.v4.media.session.MediaControllerCompat;
@@ -400,6 +402,15 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         } else {
             switchPlayMode(currentPlaylist);
         }
+
+        // Handle LOGIN mode launched from session-expired banner
+        String activityMode = getIntent().getStringExtra("mode");
+        if ("LOGIN".equals(activityMode)) {
+            long loginFeedId = getIntent().getLongExtra("feed_id", -1);
+            String loginUrl = getIntent().getStringExtra("login_url");
+            setupLoginMode(loginFeedId, loginUrl != null ? loginUrl : "about:blank");
+            return; // don't call loadEntryContent in login mode
+        }
         
         loadEntryContent();
     }
@@ -517,14 +528,17 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
 
         EntryInfo entryInfo = webViewViewModel.getEntryInfoById(currentId);
         if (entryInfo == null) { makeSnackbar("Error: Could not load article data."); finish(); return; }
+        // AFTER (safe):
         if (entryInfo.getContent() == null || entryInfo.getContent().trim().isEmpty()) {
             Log.e("SAFE_GUARD", "❌ No content → force browser mode");
-
+            currentId = entryId;
+            currentLink = entryInfo.getEntryLink();
+            feedId = entryInfo.getFeedId();
+            bookmark = entryInfo.getBookmark() != null ? entryInfo.getBookmark() : "N";
+            content = null;
             webView.loadUrl(entryInfo.getEntryLink());
-
             browserButton.setVisible(false);
             offlineButton.setVisible(false);
-
             return;
         }
 
@@ -1907,6 +1921,94 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
         Log.d(TAG, "onConfigurationChanged: orientation changed, activity not recreated.");
     }
 
+    // ── SESSION LOGIN MODE ──────────────────────────────────────────────────
+
+    private void setupLoginMode(long feedId, String loginUrl) {
+        // Hide all normal playback UI — this is a login-only session
+        if (functionButtons != null) functionButtons.setVisibility(View.GONE);
+        if (functionButtonsReadingMode != null) functionButtonsReadingMode.setVisibility(View.GONE);
+
+        // Show a clear title so user knows what this screen is for
+        if (getSupportActionBar() != null) {
+            getSupportActionBar().setTitle("Log in to continue");
+        }
+
+        // Use a dedicated WebViewClient that watches for post-login signals
+        webView.setWebViewClient(new WebViewClient() {
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                if (url == null || url.startsWith("about:")) return;
+
+                // Signal 1: URL-based detection — navigated away from any /login path
+                boolean urlWasLoginPage =
+                        loginUrl.contains("login") ||
+                                loginUrl.contains("signin");
+                boolean currentUrlIsNotLoginPage =
+                        !url.contains("login") &&
+                                !url.contains("signin") &&
+                                !url.contains("sign-in");
+
+                if (urlWasLoginPage && currentUrlIsNotLoginPage) {
+                    // We've moved away from the login page — very likely authenticated now
+                    // Confirm with a JS check for a logout link
+                    view.evaluateJavascript(
+                            "(function() { var b = document.body ? document.body.innerHTML.toLowerCase() : ''; " +
+                                    "return (b.indexOf('logout') >= 0 || b.indexOf('log out') >= 0 || " +
+                                    "b.indexOf('sign out') >= 0 || b.indexOf('my account') >= 0 || " +
+                                    "b.indexOf('profile') >= 0) ? 'yes' : 'no'; })()",
+                            result -> {
+                                if ("\"yes\"".equals(result)) {
+                                    onLoginSuccess(feedId);
+                                }
+                            }
+                    );
+                }
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                view.loadUrl(url);
+                return true;
+            }
+        });
+
+        webView.loadUrl(loginUrl);
+    }
+
+    private void onLoginSuccess(long feedId) {
+        // Flush cookies so OkHttp can read them immediately
+        CookieManager.getInstance().flush();
+
+        // Save the fresh cookie to SharedPreferences for export/import continuity
+        android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+        try {
+            java.net.URL feedUrl = new java.net.URL(getIntent().getStringExtra("login_url"));
+            String domain = feedUrl.getProtocol() + "://" + feedUrl.getHost();
+            String freshCookie = cm.getCookie(domain);
+            if (freshCookie != null) {
+                sharedPreferencesRepository.setSavedCookie(domain, freshCookie);
+            }
+        } catch (Exception ignored) {}
+
+        // Update DB — marks session VALID, which unblocks TtsExtractor
+        webViewViewModel.markFeedSessionValid(feedId);
+
+        // Show success feedback
+        Snackbar.make(binding.getRoot(),
+                "Login successful! Extraction will resume.",
+                Snackbar.LENGTH_SHORT).show();
+
+        // Restart extraction for previously blocked entries (after a short delay
+        // to let the DB write complete)
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            ttsExtractor.extractAllEntries();
+            finish(); // close login screen and return to the app
+        }, 1500);
+    }
+// ── END SESSION LOGIN MODE ──────────────────────────────────────────────
+
     private class WebClient extends WebViewClient {
 
         @Override
@@ -1942,15 +2044,10 @@ public class WebViewActivity extends AppCompatActivity implements WebViewListene
                 String host = uri.getHost();
 
                 if (host == null) {
-                    Log.e("COOKIE_FLOW", "❌ HOST NULL → SKIP SAVE");
                     return;
                 }
 
                 String domain = uri.getScheme() + "://" + host;
-
-                Log.e("COOKIE_FLOW", "URL = " + url);
-                Log.e("COOKIE_FLOW", "COOKIE = " + cookie);
-                Log.e("COOKIE_FLOW", "DOMAIN = " + domain);
 
                 sharedPreferencesRepository.setSavedCookie(domain, cookie);
                 CookieManager cookieManager = CookieManager.getInstance();

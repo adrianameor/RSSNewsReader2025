@@ -33,10 +33,14 @@ public class MainApplication extends Application implements Configuration.Provid
                 .build();
     }
 
-    // THIS IS THE FIX: The onCreate method is called once when the app starts.
-    // This is the "key turn" that has been missing this entire time.
     @Override
     public void onCreate() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            String processName = Application.getProcessName();
+            if (!getPackageName().equals(processName)) {
+                android.webkit.WebView.setDataDirectorySuffix(processName);
+            }
+        }
         super.onCreate();
         Log.d("MainApplication", "RssWorkManager has been enqueued on app startup.");
     }

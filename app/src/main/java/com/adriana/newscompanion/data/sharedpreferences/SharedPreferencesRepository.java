@@ -239,6 +239,14 @@ public class SharedPreferencesRepository {
         return sharedPreferences.getBoolean("ai_cleaning_enabled", true);
     }
 
+    public void setCachedUserAgent(String ua) {
+        getEditor().putString("cached_user_agent", ua).apply();
+    }
+
+    public String getCachedUserAgent() {
+        return sharedPreferences.getString("cached_user_agent", null);
+    }
+
     public void setCurrentTtsContent(String content) {
         getEditor().putString("current_tts_content", content).commit();
     }

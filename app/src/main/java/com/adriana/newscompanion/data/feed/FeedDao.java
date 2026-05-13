@@ -55,4 +55,16 @@ public interface FeedDao {
 
     @Query("SELECT * FROM feed_table WHERE id = :feedId")
     Feed getFeedById(long feedId);
+
+    @Query("UPDATE feed_table SET isAuthenticated = :authenticated, authStatus = :status WHERE id = :id")
+    void updateAuthStatus(long id, boolean authenticated, int status);
+
+    @Query("SELECT * FROM feed_table WHERE requiresLogin = 1")
+    List<Feed> getAuthRequiredFeeds();
+
+    @Query("SELECT * FROM feed_table WHERE requiresLogin = 1 AND authStatus = 1")
+    Flowable<List<Feed>> getExpiredAuthFeeds();
+
+    @Query("SELECT * FROM feed_table WHERE requiresLogin = 1 AND authStatus = 1")
+    Flowable<List<Feed>> getExpiredAuthFeedsFlowable();
 }

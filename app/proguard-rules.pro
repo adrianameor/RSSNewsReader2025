@@ -38,3 +38,42 @@
 
 # Keep Gson models
 -keep class com.google.gson.** { *; }
+
+# Protect WebViewClient callbacks from R8 stripping
+-keepclassmembers class * extends android.webkit.WebViewClient {
+    public void *(android.webkit.WebView, java.lang.String);
+    public boolean *(android.webkit.WebView, java.lang.String);
+    public void *(android.webkit.WebView, android.webkit.WebResourceRequest);
+}
+
+# Protect TtsExtractor WebClient inner class
+-keep class com.adriana.newscompanion.service.tts.TtsExtractor$* { *; }
+-keep class com.adriana.newscompanion.service.tts.TtsExtractor { *; }
+
+# Protect LoginWebViewActivity WebClient
+-keep class com.adriana.newscompanion.ui.loginwebview.LoginWebViewActivity$* { *; }
+
+# Protect WebViewActivity WebClient
+-keep class com.adriana.newscompanion.ui.webview.WebViewActivity$* { *; }
+
+# Keep Readability4J
+-keep class net.dankito.readability4j.** { *; }
+-keep public class org.jsoup.** { public *; }
+
+-keepattributes *Annotation*
+-keepattributes EnclosingMethod
+-keepattributes InnerClasses
+-keepattributes SourceFile,LineNumberTable
+
+-keep class net.dankito.** { *; }
+-dontwarn net.dankito.**
+
+-keepclassmembers class * extends android.webkit.WebViewClient {
+    public void *(android.webkit.WebView, java.lang.String, android.graphics.Bitmap);
+    public boolean *(android.webkit.WebView, android.webkit.WebResourceRequest);
+}
+
+-keep class com.adriana.newscompanion.data.feed.Feed { *; }
+-keep class com.adriana.newscompanion.data.entry.Entry { *; }
+-keep class com.adriana.newscompanion.data.feed.FeedDao { *; }
+-keep class com.adriana.newscompanion.data.entry.EntryDao { *; }

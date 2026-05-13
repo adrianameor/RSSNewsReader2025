@@ -20,7 +20,7 @@ import com.adriana.newscompanion.data.playlist.PlaylistDao;
 import javax.inject.Inject;
 import javax.inject.Provider;
 
-@Database(entities = {Feed.class, Entry.class, Playlist.class, History.class}, version = 12)
+@Database(entities = {Feed.class, Entry.class, Playlist.class, History.class}, version = 13)
 @androidx.room.TypeConverters({TypeConverters.class})
 public abstract class AppDatabase extends RoomDatabase {
 
@@ -144,6 +144,17 @@ public abstract class AppDatabase extends RoomDatabase {
                 Log.d("DatabaseMigration", "Migration from v11 to v12 completed successfully.");
             } catch (Exception e) {
                 Log.e("DatabaseMigration", "Migration v11 to v12 failed: " + e.getMessage());
+            }
+        }
+    };
+    public static final Migration MIGRATION_12_13 = new Migration(12, 13) {
+        @Override
+        public void migrate(@NonNull SupportSQLiteDatabase database) {
+            try {
+                database.execSQL("ALTER TABLE feed_table ADD COLUMN authStatus INTEGER NOT NULL DEFAULT 2");
+                Log.d("DatabaseMigration", "Migration from v12 to v13 completed successfully.");
+            } catch (Exception e) {
+                Log.e("DatabaseMigration", "Migration v12 to v13 failed: " + e.getMessage());
             }
         }
     };

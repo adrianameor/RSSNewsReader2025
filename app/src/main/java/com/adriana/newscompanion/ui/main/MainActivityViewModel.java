@@ -25,6 +25,7 @@ import io.reactivex.rxjava3.disposables.Disposable;
 import io.reactivex.rxjava3.functions.Action;
 import io.reactivex.rxjava3.functions.Consumer;
 import io.reactivex.rxjava3.schedulers.Schedulers;
+import androidx.lifecycle.LiveDataReactiveStreams;
 
 @HiltViewModel
 public class MainActivityViewModel extends ViewModel {
@@ -101,7 +102,6 @@ public class MainActivityViewModel extends ViewModel {
     TtsExtractor ttsExtractor;
 
     public void triggerExtractionAfterImport() {
-        Log.e("PIPELINE_FIX", "🚀 ViewModel triggering extraction");
         ttsExtractor.extractAllEntries();
     }
 
@@ -110,5 +110,16 @@ public class MainActivityViewModel extends ViewModel {
             entryRepository.invalidateAllTranslationsSync();
             ttsExtractor.startPipeline();
         }).start();
+    }
+
+    public void validateAuthenticatedFeeds() {
+        feedRepository.validateAuthenticatedFeeds();
+    }
+
+    public LiveData<List<Feed>> getExpiredAuthFeeds() {
+        // Convert the Flowable from Room into LiveData for the Activity to observe
+        return androidx.lifecycle.LiveDataReactiveStreams.fromPublisher(
+                feedRepository.getExpiredAuthFeedsFlowable()
+        );
     }
 }

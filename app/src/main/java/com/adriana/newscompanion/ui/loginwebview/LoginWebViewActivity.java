@@ -62,7 +62,33 @@ public class LoginWebViewActivity extends AppCompatActivity {
                     finish();
                 })
                 .setPositiveButton(R.string.yes, (dialogInterface, i) -> {
-                    // User confirmed login complete - set RESULT_OK and finish
+                    // Flush cookies to disk BEFORE finishing — critical for release APK
+                    android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+                    cm.flush();
+
+                    // Save cookies to SharedPreferences so TtsExtractor can find them
+                    // Use the base domain (not article URL) as the key
+                    try {
+                        java.net.URL parsed = new java.net.URL(link);
+                        String baseDomain = parsed.getProtocol() + "://" + parsed.getHost();
+                        String cookie = cm.getCookie(baseDomain);
+                        if (cookie != null && !cookie.isEmpty()) {
+                            sharedPreferencesRepository.setSavedCookie(baseDomain, cookie);
+                            Log.d("LoginWebView", "Saved cookie for domain: " + baseDomain + " → " + cookie);
+                        } else {
+                            // Some sites set cookies on www vs root — try the full link too
+                            cookie = cm.getCookie(link);
+                            if (cookie != null && !cookie.isEmpty()) {
+                                sharedPreferencesRepository.setSavedCookie(baseDomain, cookie);
+                                Log.d("LoginWebView", "Saved cookie via link fallback for: " + baseDomain);
+                            } else {
+                                Log.w("LoginWebView", "WARNING: No cookies found after login for: " + baseDomain);
+                            }
+                        }
+                    } catch (Exception e) {
+                        Log.e("LoginWebView", "Cookie save failed: " + e.getMessage());
+                    }
+
                     setResult(Activity.RESULT_OK, new Intent());
                     finish();
                 })

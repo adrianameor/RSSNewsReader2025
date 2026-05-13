@@ -5,6 +5,7 @@ import android.content.Context;
 
 import java.net.HttpURLConnection;
 
+import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.JsonReader;
@@ -174,6 +175,7 @@ public class TtsExtractor {
                         }
                     }
                     String finalFullText = contentCollector.toString();
+                    Log.e("CONTENT_DEBUG", "Entry=" + webViewSafeId + " contentLength=" + finalFullText.length() + " first200=" + finalFullText.substring(0, Math.min(200, finalFullText.length())));
                     if (finalFullText.length() < 200 || finalFullText.toLowerCase().contains("please enable javascript")) {
                         // Fallback to WebView: Flag this feed as requiring WebView for future articles
                         com.adriana.newscompanion.data.feed.Feed feed = feedRepository.getFeedById(entry.getFeedId());
@@ -219,43 +221,63 @@ public class TtsExtractor {
     private void extractWithWebView(Entry entry) {
         webViewSafeId = entry.getId();
         webViewExpectedUrl = entry.getLink();
+        // AFTER:
         String cookie = android.webkit.CookieManager.getInstance().getCookie(entry.getLink());
-        Log.e("COOKIE_DEBUG", "Cookie for " + entry.getLink() + " = " + cookie);
+
+// In release APKs, CookieManager may return null even after login.
+// Fall back to the cookie saved in SharedPreferences by WebViewActivity.
+        if (cookie == null || cookie.isEmpty()) {
+            try {
+                java.net.URL parsedUrl = new java.net.URL(entry.getLink());
+                String domain = parsedUrl.getProtocol() + "://" + parsedUrl.getHost();
+                cookie = sharedPreferencesRepository.getSavedCookie(domain);
+                Log.w(TAG, "CookieManager returned null, using SharedPreferences cookie for: " + domain);
+
+                // Re-inject into CookieManager so the WebView can use it
+                if (cookie != null && !cookie.isEmpty()) {
+                    CookieManager cm = CookieManager.getInstance();
+                    for (String c : cookie.split(";")) {
+                        cm.setCookie(entry.getLink(), c.trim());
+                    }
+                    cm.flush();
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Cookie fallback failed: " + e.getMessage());
+            }
+        }
         Log.e("COOKIE_BEFORE_LOAD", "Cookie = " +
                 CookieManager.getInstance().getCookie(entry.getLink()));
+
+        // Capture final value AFTER all reassignment is done — required for lambda
+        final String finalCookie = cookie;
+
         ContextCompat.getMainExecutor(context).execute(() -> {
 
             String url = entry.getLink();
 
-            Log.e("COOKIE_FORCE", "Applying cookie to WebView: " + cookie);
+            Log.e("COOKIE_FORCE", "Applying cookie to WebView: " + finalCookie);
 
-            if (cookie != null) {
+            if (finalCookie != null) {
                 CookieManager cookieManager = CookieManager.getInstance();
-
-                if (cookie != null) {
-                    String[] cookies = cookie.split(";");
-
-                    for (String c : cookies) {
-                        cookieManager.setCookie(url, c.trim());
-                    }
-
-                    cookieManager.flush();
-                }
+                cookieManager.setCookie(url, finalCookie);
+                cookieManager.flush();
             }
 
             Map<String, String> headers = new HashMap<>();
-
-            if (cookie != null) {
-                headers.put("Cookie", cookie);
+            if (finalCookie != null) {
+                headers.put("Cookie", finalCookie);
             }
-
-// 🔥 CRITICAL: mimic real browser
             headers.put("User-Agent", webView.getSettings().getUserAgentString());
             headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
             headers.put("Accept-Language", "en-US,en;q=0.9");
             headers.put("Connection", "keep-alive");
 
-            webView.loadUrl(url, headers);
+            // Delay loadUrl by 300ms to give CookieManager.flush() time to persist
+            // This is the fix for inconsistent authenticated extraction
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                Log.e("LOAD_DEBUG", "Loading URL=" + url + " cookieForUrl=" + android.webkit.CookieManager.getInstance().getCookie(url));
+                webView.loadUrl(url, headers);
+            }, 300);
         });
         startWatchdog(45000);
     }
@@ -320,11 +342,19 @@ public class TtsExtractor {
 
         loadCounter++;
 
-// 🔥 ROUTER (UNCHANGED)
         com.adriana.newscompanion.data.feed.Feed feed = feedRepository.getFeedById(entry.getFeedId());
 
-        if (feed != null && feed.isAuthenticated()) {
-            Log.e("AUTH_DEBUG", "Feed marked authenticated BUT cookies may not exist");
+        Log.e("ROUTER_DEBUG", "Entry=" + entry.getId() + " feedNull=" + (feed==null) + " requiresLogin=" + (feed!=null && feed.isRequiresLogin()) + " isAuthenticated=" + (feed!=null && feed.isAuthenticated()) + " authStatus=" + (feed!=null ? feed.getAuthStatus() : "N/A") + " isSessionExpired=" + (feed!=null && feed.isSessionExpired()));
+
+        if (feed != null && feed.isRequiresLogin() && feed.isSessionExpired()) {
+            // Session is confirmed expired — skip silently, do NOT mark FAILED
+            // Entry stays with null content and will be re-attempted after user re-logs in
+            Log.w(TAG, "Skipping entry " + entry.getId() + " — session expired for: " + feed.getTitle());
+            resetFlagsAndContinue();
+            return;
+        }
+        else if (feed != null && feed.isAuthenticated()) {
+            Log.e("AUTH_DEBUG", "Feed authenticated, using WebView extraction");
             extractWithWebView(entry);
         }
         else if (feed != null && feedsRequiringWebView.contains(feed.getId())) {
@@ -526,6 +556,7 @@ public class TtsExtractor {
                                             }
                                         }
                                         String finalFullText = contentCollector.toString();
+                                        Log.e("CONTENT_DEBUG", "Entry=" + webViewSafeId + " contentLength=" + finalFullText.length() + " first200=" + finalFullText.substring(0, Math.min(200, finalFullText.length())));
                                         if (finalFullText.length() < 200 || finalFullText.toLowerCase().contains("please enable javascript")) {
                                             entryRepository.updateContent("FAILED", currentIdInProgress);
                                         } else {
@@ -579,11 +610,61 @@ public class TtsExtractor {
         @Override
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
-            if (webViewExpectedUrl == null || !url.equals(webViewExpectedUrl)) {
-                Log.e("WEBVIEW_DEBUG", "❌ IGNORE MISMATCH URL = " + url +
-                        " | expected = " + webViewExpectedUrl);
-                return;
+
+            // ── NEW: detect redirect to login page ──────────────────────────────
+            // This fires when the server silently redirects the background WebView
+            // to a login page instead of the article. Without this, the extractor
+            // reads login-page HTML, finds it too short, retries 3x, then marks
+            // the entry FAILED (red). Now we detect and skip cleanly instead.
+            if (webViewExpectedUrl != null) {
+
+                Uri currentUri = Uri.parse(url);
+                Uri expectedUri = Uri.parse(webViewExpectedUrl);
+
+                String currentPath = currentUri.getPath();
+                String expectedPath = expectedUri.getPath();
+
+                boolean sameArticle =
+                        currentPath != null &&
+                                currentPath.equals(expectedPath);
+
+                if (!sameArticle) {
+
+                    boolean isLoginPage =
+                            url.contains("login") ||
+                                    url.contains("signin") ||
+                                    url.contains("sign-in") ||
+                                    url.contains("/auth") ||
+                                    url.contains("account/login");
+
+                    if (isLoginPage) {
+                        Log.e(TAG, "extractWithWebView: redirected to login page → marking session expired. URL=" + url);
+
+                        long safeId = webViewSafeId;
+
+                        Entry currentEntry = entryRepository.getEntryById(safeId);
+
+                        if (currentEntry != null) {
+                            Feed feed = feedRepository.getFeedById(currentEntry.getFeedId());
+
+                            if (feed != null) {
+                                feedRepository.markSessionExpired(feed.getId());
+                            }
+                        }
+
+                        cancelWatchdog();
+                        resetFlagsAndContinue();
+                        return;
+                    }
+
+                    Log.e("WEBVIEW_DEBUG",
+                            "❌ REAL MISMATCH URL = " + url +
+                                    " | expected = " + webViewExpectedUrl);
+
+                    return;
+                }
             }
+
             if (extractionInProgress) {
                 Log.e("WEBVIEW_DEBUG", "onPageFinished URL = " + url + " | currentId = " + currentIdInProgress);
                 handler.postDelayed(() -> checkContentReady(view, 0), delayTime * 1000L);

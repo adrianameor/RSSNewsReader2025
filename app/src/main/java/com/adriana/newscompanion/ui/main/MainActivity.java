@@ -57,6 +57,7 @@ import java.util.Map;
 import javax.inject.Inject;
 
 import dagger.hilt.android.AndroidEntryPoint;
+import com.google.android.material.snackbar.Snackbar;
 @AndroidEntryPoint
 public class MainActivity extends AppCompatActivity {
 
@@ -68,6 +69,7 @@ public class MainActivity extends AppCompatActivity {
     private MaterialSwitch themeSwitch;
     private NavigationFeedItemAdapter adapter;
     private MainActivityViewModel mainActivityViewModel;
+    private final java.util.Set<Long> shownExpiredBanners = new java.util.HashSet<>();
     @Inject
     SharedPreferencesRepository sharedPreferencesRepository;
 
@@ -244,10 +246,9 @@ public class MainActivity extends AppCompatActivity {
 
                                     rehydrateCookies();
                                     new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                                        mainActivityViewModel.validateAuthenticatedFeeds(); // ← ADD THIS LINE
                                         mainActivityViewModel.triggerExtractionAfterImport();
-
                                         mainActivityViewModel.reprocessAllAfterImport();
-
                                     }, 1000);
                                 } catch (IOException | XmlPullParserException e) {
                                     e.printStackTrace();
@@ -527,6 +528,25 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
+        // Cache the WebView User-Agent once for use by OkHttp validation
+        if (savedInstanceState == null) {
+            WebView tempWebView = new WebView(this);
+            String ua = tempWebView.getSettings().getUserAgentString();
+            sharedPreferencesRepository.setCachedUserAgent(ua);
+            tempWebView.destroy();
+
+            // Trigger session validation on first launch (not on rotation)
+            mainActivityViewModel.validateAuthenticatedFeeds();
+        }
+
+        // Observe expired auth feeds and show login banner
+        mainActivityViewModel.getExpiredAuthFeeds().observe(this, expiredFeeds -> {
+            if (expiredFeeds == null || expiredFeeds.isEmpty()) return;
+            for (Feed feed : expiredFeeds) {
+                showSessionExpiredBanner(feed);
+            }
+        });
+
         mainActivityViewModel.getAllFeeds().observe(this, new Observer<List<Feed>>() {
             @Override
             public void onChanged(List<Feed> feeds) {
@@ -545,6 +565,39 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void showSessionExpiredBanner(Feed feed) {
+        if (feed == null) return;
+        // Don't show the same banner twice in the same app session
+        if (shownExpiredBanners.contains(feed.getId())) return;
+        shownExpiredBanners.add(feed.getId());
+
+        com.google.android.material.snackbar.Snackbar.make(
+                binding.getRoot(),
+                "Session expired for \"" + feed.getTitle() + "\" — tap to log in again",
+                com.google.android.material.snackbar.Snackbar.LENGTH_INDEFINITE
+        ).setAction("Log In", v -> {
+            shownExpiredBanners.remove(feed.getId()); // allow re-show if dismissed without login
+            Intent intent = new Intent(this, com.adriana.newscompanion.ui.webview.WebViewActivity.class);
+            intent.putExtra("mode", "LOGIN");
+            intent.putExtra("feed_id", feed.getId());
+            String loginUrl = deriveLoginUrl(feed.getLink());
+            intent.putExtra("login_url", loginUrl);
+            startActivity(intent);
+        }).show();
+    }
+
+    private String deriveLoginUrl(String feedLink) {
+        if (feedLink == null) return feedLink;
+        try {
+            java.net.URL url = new java.net.URL(feedLink);
+            // Try common login paths. The user will be shown the page and can
+            // navigate manually if this isn't the exact login URL.
+            return url.getProtocol() + "://" + url.getHost() + "/login";
+        } catch (Exception e) {
+            return feedLink;
+        }
+    }
+
     public void updateThemeSwitch() {
         boolean isNight = mainActivityViewModel.getNight();
         themeSwitch.setChecked(isNight);
@@ -560,5 +613,9 @@ public class MainActivity extends AppCompatActivity {
         NavController navController = Navigation.findNavController(this, R.id.nav_host_fragment_content_main);
         return NavigationUI.navigateUp(navController, appBarConfiguration)
                 || super.onSupportNavigateUp();
+    }
+
+    public void triggerSessionValidation() {
+        mainActivityViewModel.validateAuthenticatedFeeds();
     }
 }
